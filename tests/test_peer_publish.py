@@ -286,13 +286,32 @@ def test_ps1_is_powershell51_safe():
     assert "Remove-Item" not in code                                                      # overwrite only
 
 
-def test_ps1_uses_existing_cli_options():
-    """Every subcommand / option the script passes exists in the argparse parser."""
+def _cli_options(cmd: list[str], capsys) -> str:
+    with pytest.raises(SystemExit):
+        main([*cmd, "--help"])
+    return capsys.readouterr().out
+
+
+def test_ps1_uses_existing_cli_options(capsys):
+    """Every option the script passes to a subcommand exists in that subcommand's argparse parser."""
     text = PS1.read_text(encoding="utf-8-sig")
-    src = (ROOT / "src" / "edinet_risk" / "__main__.py").read_text(encoding="utf-8")
-    opts = set(re.findall(r'"(--[a-z][a-z-]*)"', text))
-    assert {"--targets", "--run-id", "--include-pending", "--resolve", "--publish-dir", "--out-root"} <= opts
-    for o in opts:
-        assert f'"{o}"' in src, o
-    for cmd in re.findall(r'@\("([a-z][a-z-]*)"', text):
-        assert f'add_parser("{cmd}"' in src, cmd
+    lines, buf = [], ""
+    for ln in text.splitlines():                 # join array continuation lines ("...,\n  ...")
+        buf += ln.strip() + " "
+        if not ln.rstrip().endswith(","):
+            lines.append(buf)
+            buf = ""
+    nested = {"publish", "doclist", "codes", "population"}
+    seen = set()
+    for ln in lines:
+        m = re.search(r'@\("([a-z][a-z-]*)"(?:,\s*"([a-z][a-z-]*)")?', ln)
+        if not m:
+            continue
+        cmd = [m.group(1)] + ([m.group(2)] if m.group(1) in nested and m.group(2) else [])
+        helptext = _cli_options(cmd, capsys)
+        for o in re.findall(r'"(--[a-z][a-z-]*)"', ln):
+            assert re.search(rf"(?<![\w-]){re.escape(o)}(?![\w-])", helptext), f"{' '.join(cmd)} has no {o}"
+        seen.add(" ".join(cmd))
+    assert {"publish config", "publish targets", "doclist sync", "resolve", "fetch", "extract", "compare", "report",
+            "monitor", "publish check"} <= seen, seen
+    assert re.search(r'@\("fetch",[^)]*"--targets"', text)     # fetch refuses to run unscoped without --all
