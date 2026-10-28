@@ -62,8 +62,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1    
 1. `publish targets`: transport7 ＋依頼社リストを `out\publish\targets.toml` にまとめる
 2. `doclist sync --from <今日-7日> --to <今日>`
 3. `resolve`（取得対象を決める）→ `fetch --include-pending` → `extract` → `resolve`（本文取得後。公開に使う）
-4. `compare` → `report`（`risk_diff_transport7.xlsx`）→ `monitor`
-5. `publish build`: `社一覧.xlsx`・`社別\<証券コード>_<社名>.md`・`週次要約.md` を `publish\` に生成。`risk_diff_transport7.xlsx` → `risk_diff.xlsx`、`monitor_<run-id>\monitor.xlsx` → `monitor.xlsx` にリネームしてコピー
+4. `compare`（本文は `cache\docs\` の type=1 ZIP から読む）→ `report`（`risk_diff_transport7.xlsx`）→ `monitor`
+5. `publish build`: `社一覧.xlsx`・`社別\<証券コード>_<社名>.md`・`週次要約.md` を `publish\` に生成し、`docs\templates\*.xlsx` を `publish\templates\` にコピー。`risk_diff_transport7.xlsx` → `risk_diff.xlsx`、`monitor_<run-id>\monitor.xlsx` → `monitor.xlsx` にリネームしてコピー
 6. `publish check`: 5種がそろい、`社一覧.xlsx` と `monitor.xlsx` が当日付か。だめなら **同期しない**（前回分が残る）
 7. 成功時のみ `dest_dir` へ同じ相対パスで **上書きコピー**（削除しない。削除→新規作成だとリンクが変わる）
 
@@ -92,7 +92,7 @@ schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
 
 - 終了コード 0 = 成功（タスクスケジューラの「前回の実行結果」が 0x0）、1 = 失敗（同期していない）。
 - ログ: `out\publish\logs\publish_peer_<日時>.log`（キーは出ない）。
-- 「完了（警告 n 件…）」は続行できた警告（取得の一時失敗、前期なしで比較できない社など）。`monitor.xlsx` の要確認を見る。
+- 「完了（警告 n 件…）」は続行できた警告（終了コード 2: doclist／fetch の一時失敗、compare の前期なしで比較できない社、report の照合で全文一致しない社）。`monitor.xlsx` の要確認を見る。
 - 公開フォルダの `社一覧.xlsx`・`monitor.xlsx` の更新日が当日になっていること。
 
 ## 7. 失敗したとき
@@ -124,3 +124,16 @@ schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
 - 正規名: `docs/publish_peer.spec.md`
 - 利用者プロンプト（Excel 体裁固定）: `docs/copilot-runbook.md` / `docs/templates/yoY_report_template.xlsx`
 - 全体像: `docs/overview.md`
+
+## 11. 確認状況（2026-10-29 時点）
+
+済み（社外の開発環境、ネットワークなし `--offline`、DB はコピーを使用）:
+- ps1 と同じ順・同じ引数で CLI を実行（`publish targets` → `resolve` → `fetch --dry-run` → `extract` → `resolve` → `compare` → `report` → `monitor` → `publish build` → リネームコピー → `publish check`）。輸送7社で `publish check` が ok、`publish\templates\yoY_report_template.xlsx`（`差分詳細`・`分析` シート込み）のコピーを確認。
+- ps1 の静的テスト（`tests/test_peer_publish.py`）: UTF-8 BOM・PowerShell 5.1 で使えない構文なし・各サブコマンドに渡すオプション（`--config` を含む）が CLI に実在・ps1 が読む JSON キーが `publish config`／`publish build` の出力に実在。
+
+未（この環境ではできないため実施していない）:
+- [ ] 社内の管理用 Windows・PowerShell 5.1 での `publish_peer.ps1` の実行（`-DryRun` を含め、ps1 そのものはまだ一度も実行していない）
+- [ ] タスクスケジューラ登録と定期実行（§5）
+- [ ] SharePoint の実 URL・同期フォルダ（`dest_dir`）の確定と、同期フォルダへのコピー・OneDrive のアップロード
+- [ ] 統合プロンプトのリンクを実 URL に差し替えて M365 Copilot 実機で読めるかの確認（`copilot-runbook.md`「パイロット第1確認」）
+- [ ] 本番キーでの `doclist sync`／`fetch`（週次差分の取得）

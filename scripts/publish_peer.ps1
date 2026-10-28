@@ -162,12 +162,13 @@ try {
         "--publish-dir", $Work) + $CfgArgs
     if ($DryRun) {
         Write-Log ("[build] {0} -m edinet_risk {1}" -f $Python, (Format-Args $buildArgs))
+        Write-Log ("[build] docs\templates\*.xlsx -> {0}" -f (Join-Path $Work "templates"))
         Copy-Over (Join-Path $m1 "run_$R2\risk_diff_transport7.xlsx") (Join-Path $Work "risk_diff.xlsx")
         Copy-Over ("{0}\monitor_<run-id>\monitor.xlsx" -f $Out) (Join-Path $Work "monitor.xlsx")
         Write-Log ("[check] {0} -m edinet_risk publish check --publish-dir {1}" -f $Python, $Work)
     } else {
         $built = Invoke-Json "build" $buildArgs
-        Write-Log ("    社一覧 {0} 社、社別 md {1} 件" -f $built.companies, @($built.md).Count)
+        Write-Log ("    社一覧 {0} 社、社別 md {1} 件、templates {2} 件" -f $built.companies, @($built.md).Count, @($built.templates).Count)
         Copy-Over $built.copies."risk_diff.xlsx" (Join-Path $Work "risk_diff.xlsx")
         Copy-Over $built.copies."monitor.xlsx" (Join-Path $Work "monitor.xlsx")
         # ---- 7. 成功の定義（5種そろい、社一覧・monitor が当日）

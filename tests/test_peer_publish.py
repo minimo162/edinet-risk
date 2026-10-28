@@ -309,9 +309,29 @@ def test_ps1_uses_existing_cli_options(capsys):
             continue
         cmd = [m.group(1)] + ([m.group(2)] if m.group(1) in nested and m.group(2) else [])
         helptext = _cli_options(cmd, capsys)
-        for o in re.findall(r'"(--[a-z][a-z-]*)"', ln):
+        opts = re.findall(r'"(--[a-z][a-z-]*)"', ln) + (["--config"] if "$CfgArgs" in ln else [])
+        for o in opts:
             assert re.search(rf"(?<![\w-]){re.escape(o)}(?![\w-])", helptext), f"{' '.join(cmd)} has no {o}"
         seen.add(" ".join(cmd))
     assert {"publish config", "publish targets", "doclist sync", "resolve", "fetch", "extract", "compare", "report",
-            "monitor", "publish check"} <= seen, seen
+            "monitor", "publish build", "publish check"} <= seen, seen
     assert re.search(r'@\("fetch",[^)]*"--targets"', text)     # fetch refuses to run unscoped without --all
+
+
+def test_ps1_reads_existing_json_keys(tmp_path, capsys):
+    """Every ``$cfg.<key>`` / ``$built.<key>`` the script reads is in the `publish config` / `publish build` JSON."""
+    text = PS1.read_text(encoding="utf-8-sig")
+    s = tmp_path / "settings.toml"
+    s.write_text("", encoding="utf-8")
+    assert main(["publish", "config", "--config", str(s)]) == 0
+    cfg = json.loads(capsys.readouterr().out)
+    out = _outputs(tmp_path)
+    assert main(["publish", "build", "--out-root", str(out), "--resolve-run", RUN, "--targets", str(_targets(tmp_path)),
+                 "--publish-dir", str(tmp_path / "pub")]) == 0
+    built = json.loads(capsys.readouterr().out)
+    for var, obj in (("cfg", cfg), ("built", built)):
+        keys = set(re.findall(rf"\${var}\.([A-Za-z_]+)", text))
+        assert keys, var
+        assert keys <= set(obj), f"${var}: {keys - set(obj)} not in the JSON"
+    for k in re.findall(r'\$built\.copies\."([^"]+)"', text):
+        assert k in built["copies"], k
