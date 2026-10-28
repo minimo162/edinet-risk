@@ -1,0 +1,61 @@
+# edinet-risk 設定の雛形（計画 §3 config/settings.example.toml）。
+# config/settings.toml にコピーして編集する（settings.toml は版管理しない）。
+# APIキーはここに書かない。環境変数 EDINET_API_KEY（または paths.api_key_file）から読む（§6-8）。
+# 環境変数で上書き可: EDINET_RISK__<SECTION>__<KEY>=値（例: EDINET_RISK__API__MIN_INTERVAL=2）。
+# 相対パスはカレントディレクトリ基準。
+
+[paths]
+data_dir = ""            # 空 = %LOCALAPPDATA%\edinet-risk（Windows）/ ~/.local/share/edinet-risk
+db = ""                  # 空 = {data_dir}/edinet_risk.sqlite
+raw_dir = ""             # 空 = {data_dir}/raw
+out_dir = ""             # 空 = {data_dir}/out
+log_dir = ""             # 空 = {data_dir}/logs
+cache_dir = "cache"      # M0 の応答キャッシュ（オフライン再利用）
+filing_filter = "config/filing_filter.toml"
+thresholds = "config/thresholds.toml"
+api_key_file = ""        # 任意。配布ディレクトリの外に置くこと
+
+[api]
+base_url = "https://api.edinet-fsa.go.jp/api/v2"
+min_interval = 1.0       # 秒。下限 1.0 固定（§6-4）
+max_retries = 5
+backoff_base = 60.0      # 60 → 120 → 240 秒…
+backoff_max = 3600.0     # 1回の待ちの上限（秒）
+fetch_max_attempts = 3   # fetch: 一時的な失敗（429・5xx・通信エラー）を後続の実行で再試行する回数の上限
+timeout = 120.0
+doclist_quiet_start = "00:00"   # 日次差替えの時間帯は書類一覧APIを呼ばない
+doclist_quiet_end = "01:00"
+
+[run]
+fy = "2026-03"
+as_of = 2026-09-30       # 基準日 T（§6-5）
+
+# 年度窓（§6-1）。periodEnd 窓と提出日の走査窓
+[window.current]
+period_end_from = 2025-04-01
+period_end_to = 2026-03-31
+submit_from = 2025-04-01
+submit_to = 2026-09-30
+
+[window.previous]
+period_end_from = 2024-04-01
+period_end_to = 2025-03-31
+submit_from = 2024-04-01
+submit_to = 2025-09-30
+
+# 版の選択・前期の特定（§6-5）
+[resolve]
+prev_gap_ok_days = 1     # gap == 1日 で正常
+prev_gap_max_days = 31   # 2〜31日は prev_gap、超えたら prev_missing_year（比較しない）
+period_min_days = 365    # 決算期間がこの範囲外なら irregular
+period_max_days = 366
+partial_ratio = 0.5      # 訂正版本文が原本の50%未満なら correction_partial
+
+[llm]                    # M3
+adapter = "none"         # none | replay | http
+provider = ""
+model = ""
+api_key_env = "LLM_API_KEY"   # 環境変数名のみ
+
+[logging]
+level = "INFO"

@@ -1,0 +1,13 @@
+# 有報の絞り込み条件（レビュー H2 / 計画 §6-1）。M0 のクロス集計を根拠に版管理する。
+version = "0.1-m0"
+
+[annual_report]
+docTypeCode = ["120"]
+ordinanceCode = ["010"]
+formCode = ["030000"]
+xbrlFlag = "1"
+
+# M2 以降で使う予定（M0-8 で意味を確定してから有効化）
+[candidates]
+correction_docTypeCode = ["130"]
+formCode_extra = ["030001", "702001"]

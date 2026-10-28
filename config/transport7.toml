@@ -1,0 +1,41 @@
+# M0 Step 2: 輸送用機器（自動車）7社。edinetCode で照合する（filerName の部分一致は誤爆しうるため）。
+# filerName は照合結果の確認用（doclist 上の表記と一致しなければ警告）。
+[[filer]]
+label = "トヨタ自動車"
+edinetCode = "E02144"
+
+[[filer]]
+label = "本田技研工業"
+edinetCode = "E02166"
+
+[[filer]]
+label = "日産自動車"
+edinetCode = "E02142"
+
+[[filer]]
+label = "SUBARU"
+edinetCode = "E02152"
+
+[[filer]]
+label = "マツダ"
+edinetCode = "E02163"
+
+[[filer]]
+label = "三菱自動車工業"
+edinetCode = "E02213"
+
+[[filer]]
+label = "スズキ"
+edinetCode = "E02167"
+
+# periodEnd ごとの提出日走査窓（3月決算の有報は6月中旬〜下旬に集中）
+# 注: トヨタの2026年提出は 2026-06-10（窓の初日）。他業種へ広げる際は窓を6月初めまで広げること。
+[[period]]
+periodEnd = "2026-03-31"
+scan_from = "2026-06-10"
+scan_to = "2026-06-30"
+
+[[period]]
+periodEnd = "2025-03-31"
+scan_from = "2025-06-10"
+scan_to = "2025-06-30"

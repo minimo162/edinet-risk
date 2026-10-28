@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local secrets / runtime
+config/settings.toml
+data/
+*.sqlite
+*.sqlite-*
+
+# Caches and heavy artifacts (regenerable)
+cache/
+out/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

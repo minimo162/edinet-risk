@@ -1,0 +1,20 @@
+# 対応付けの閾値（計画 §6-6 / レビュー §5-1 の初期値）。
+# M1（7社）で初期値を確認、M2（層別サンプル）で調整する。値を変えたら version も上げること
+# （fingerprint が matches.input_sha256 に入り、対応付け以降が再計算される）。
+version = "m1-initial"
+
+[tfidf]
+ngram_min = 2            # 文字 2〜3gram の TF-IDF
+ngram_max = 3
+
+[anchor]
+anchor_body_sim_min = 0.30   # 正規化見出しの1対1完全一致 かつ 本文類似 ≥ 0.3
+
+[score]
+weight_body = 0.7        # S = 0.7*本文類似 + 0.3*見出し類似
+weight_head = 0.3
+accept_min = 0.55        # S ≥ 0.55 対応
+review_min = 0.35        # 0.35 ≤ S < 0.55 要確認、S < 0.35 未対応
+
+[contain]
+contain_min = 0.50       # 包含率 ≥ 0.5 で分割・統合

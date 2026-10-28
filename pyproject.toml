@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edinet-risk"
+version = "0.0.1"
+description = "EDINET 有報「事業等のリスク」比較ツール (M0 spike)"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "scipy"]  # scipy: test oracle only (plan §7), never a runtime dependency
+tls = ["truststore"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+edinet_risk = ["py.typed", "store/*.sql", "store/migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["live: calls the real EDINET API (set EDINET_LIVE=1 and EDINET_API_KEY)"]
