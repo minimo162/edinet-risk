@@ -20,6 +20,7 @@ killed run resumes where it stopped (M2-7). Messages written to the DB are key-m
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import sqlite3
 from collections import Counter
@@ -75,17 +76,33 @@ class Target:
     xbrl_flag: str | None
 
 
-def selection_targets(conn: sqlite3.Connection, run_id: str, entities: Iterable[str] | None = None) -> list[Target]:
-    """Distinct doc_ids of the cur / prev rows of ``run_id`` (``entities``: entity_ids to keep; None = all)."""
+def selection_targets(conn: sqlite3.Connection, run_id: str, entities: Iterable[str] | None = None, *,
+                      include_pending: bool = False) -> list[Target]:
+    """Distinct doc_ids of the cur / prev rows of ``run_id`` (``entities``: entity_ids to keep; None = all).
+
+    ``include_pending``: also the versions in ``reason_basis_json.texts_pending`` (the other versions of a
+    corrected filing, whose bodies resolve needs for correction_partial / risk_changed_by_correction); their
+    role is ``{cur|prev}_pending``.
+    """
     keep = None if entities is None else set(entities)
     by_doc: dict[str, dict] = {}
-    for r in conn.execute("SELECT f.entity_id, f.role, f.doc_id, d.xbrl_flag FROM filing_selection f "
-                          "LEFT JOIN documents d ON d.doc_id = f.doc_id "
+    pending: dict[str, tuple[str, str]] = {}
+    for r in conn.execute("SELECT f.entity_id, f.role, f.doc_id, f.reason_basis_json, d.xbrl_flag "
+                          "FROM filing_selection f LEFT JOIN documents d ON d.doc_id = f.doc_id "
                           "WHERE f.run_id = ? AND f.doc_id IS NOT NULL ORDER BY f.doc_id, f.role", (run_id,)):
         if keep is not None and r["entity_id"] not in keep:
             continue
         t = by_doc.setdefault(r["doc_id"], {"entity_id": r["entity_id"], "roles": [], "xbrl_flag": r["xbrl_flag"]})
         t["roles"].append(r["role"])
+        if include_pending:
+            for d in json.loads(r["reason_basis_json"] or "{}").get("texts_pending") or []:
+                if d != r["doc_id"]:
+                    pending.setdefault(d, (r["entity_id"], f"{r['role']}_pending"))
+    for d, (ent, role) in pending.items():
+        if d in by_doc:
+            continue
+        flag = conn.execute("SELECT xbrl_flag FROM documents WHERE doc_id = ?", (d,)).fetchone()
+        by_doc[d] = {"entity_id": ent, "roles": [role], "xbrl_flag": flag[0] if flag else None}
     return [Target(d, v["entity_id"], tuple(v["roles"]), v["xbrl_flag"]) for d, v in sorted(by_doc.items())]
 
 

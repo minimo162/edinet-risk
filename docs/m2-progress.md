@@ -279,3 +279,27 @@ unknown 445 の内訳（resolve run `resolve-20261028T151259-ac31`）:
 - 第1バッチ終了時の 276 から 67件増えました（増分は Step F 18、G 20、H 14、I 15。G は `test_fetch.py` 21件の追加と `test_store.py` の v3 対応の差し引き）。
 - skipped 1: `tests/test_match.py`。scipy が未導入のため、ハンガリアン法のオラクル比較を skip しています（M1 と同じ）。
 - deselected 2: live テストです（ネットワークを使うため除外）。
+
+## 第3バッチ自動仕上げ (2026-10-28 21:00:43 +0900)
+
+`out/m2/batch3_done.json` を参照。親 Task 切れても fetch 後の extract/resolve/monitor まで走らせた。
+
+
+## 第3バッチ extract 再実行 (2026-10-29 06:44:53 +0900)
+
+前回 `extract --offline` は引数位置誤りで失敗（正しくは `python -m edinet_risk --offline extract`）。取得 ok=3358 のあと抽出を再実行。
+
+```
+{
+  "finished_at": "2026-10-29T06:44:53+0900",
+  "extracts": 3358,
+  "fetches": {
+    "ok": 3358
+  },
+  "flags": {
+    "irregular": 31,
+    "risk_changed_by_correction": 14
+  },
+  "monitor_fail_exit": 2,
+  "zips_gb": 3.755
+}```

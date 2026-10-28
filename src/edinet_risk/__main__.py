@@ -110,6 +110,9 @@ def main(argv=None) -> int:
                      help="every entity of the resolve run (required to call the API without a narrower scope)")
     fe.add_argument("--run-id", default=None, help="resolve run whose filing_selection is used (default: latest ok)")
     fe.add_argument("--retry-failed", action="store_true", help="also request bodies with fetches.status=failed")
+    fe.add_argument("--include-pending", action="store_true",
+                    help="also the other versions of corrected filings (reason_basis_json.texts_pending), "
+                         "needed by resolve for correction_partial / risk_changed_by_correction")
     fe.add_argument("--max-attempts", type=int, default=None,
                     help="transient failures stay in the retry queue up to this many attempts "
                          "(default: api.fetch_max_attempts)")
@@ -121,6 +124,12 @@ def main(argv=None) -> int:
                                                              "(default: paths.cache_dir)")
     fe.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
     fe.add_argument("--db", type=Path, default=None, help="database path (overrides paths.db)")
+    ex = sub.add_parser("extract", help="BusinessRisks text of every fetched type=1 body -> extracts (M2; offline)")
+    ex.add_argument("--entity", nargs="+", default=None, metavar="CODE",
+                    help="only the docs of these EDINET codes (documents.edinet_code)")
+    ex.add_argument("--force", action="store_true", help="re-extract even if the ZIP hash is unchanged")
+    ex.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    ex.add_argument("--db", type=Path, default=None, help="database path (overrides paths.db)")
     mo = sub.add_parser("monitor", help="§8-3 monitoring metrics of a resolve run -> Excel + CSV (plan §3-2, M2-8; "
                                         "offline, never calls the API)")
     mo.add_argument("--run", default=None, metavar="RUN_ID",
@@ -207,6 +216,8 @@ def _dispatch(a) -> int:
         return _fetch(a)
     if a.cmd == "monitor":
         return _monitor(a)
+    if a.cmd == "extract":
+        return _extract(a)
     if a.cmd == "m1_resolve":
         return _m1_resolve(a)
     if a.cmd == "m1_segment":
@@ -659,6 +670,38 @@ def _resolve(a) -> int:
     return 0
 
 
+def _extract(a) -> int:
+    from .config import ConfigError, load_settings
+    from .extract import EXTRACTOR_VER
+    from .ingest import extract_bulk
+    from .store import db
+    try:
+        s = load_settings(a.config)
+    except ConfigError as e:
+        logging.error("%s", e)
+        return 2
+    path = a.db or s.paths.db_path
+    if not Path(path).exists():
+        logging.error("database not found: %s", path)
+        return 2
+    conn = db.open_db(path)
+    try:
+        docs = None
+        if a.entity:
+            q = ", ".join("?" for _ in a.entity)
+            docs = {r[0] for r in conn.execute(f"SELECT doc_id FROM documents WHERE edinet_code IN ({q})", a.entity)}
+        res = extract_bulk.run(conn, doc_ids=docs, force=a.force)
+        total = conn.execute("SELECT COUNT(*) FROM extracts WHERE extractor_ver = ?", (EXTRACTOR_VER,)).fetchone()[0]
+    finally:
+        conn.close()
+    print(f"extract {EXTRACTOR_VER}: extracted={res.extracted} kept={res.kept} empty={len(res.empty)} "
+          f"multi_hit={len(res.multi)} missing_file={len(res.missing_file)}; extracts rows={total}")
+    for k, ds in (("empty", res.empty), ("multi_hit", res.multi), ("missing_file", res.missing_file)):
+        for d in ds:
+            print(f"  {k} {d}")
+    return 0
+
+
 def _fetch(a) -> int:
     import uuid
     from datetime import datetime
@@ -704,11 +747,11 @@ def _fetch(a) -> int:
                                                   (resolve_run,))}
             for e in sorted(entities - present):
                 print(f"  not in resolve run {resolve_run}: {e}")
-        targets = fetch.selection_targets(conn, resolve_run, entities)
+        targets = fetch.selection_targets(conn, resolve_run, entities, include_pending=a.include_pending)
         plan = fetch.plan_fetch(conn, targets, cache, retry_failed=a.retry_failed)
         cnt = plan.count()
         print(f"fetch {scope} from resolve run {resolve_run}: entities={len({t.entity_id for t in targets})} "
-              f"docs={len(targets)} (cur/prev doc_ids) "
+              f"docs={len(targets)} (cur/prev doc_ids{' + texts_pending' if a.include_pending else ''}) "
               + " ".join(f"{k}={cnt.get(k, 0)}" for k in fetch.ACTIONS))
         if a.dry_run:
             gap = max(1.0, s.api.min_interval)
@@ -732,7 +775,7 @@ def _fetch(a) -> int:
         run_id = "fetch-" + datetime.now(db.JST).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:4]
         db.start_run(conn, run_id, "fetch", code_version=fetch.PROCESSOR_VERSION,
                      args={"scope": scope, "resolve_run": resolve_run, "retry_failed": bool(a.retry_failed),
-                           "offline": bool(a.offline), "max_attempts": max_attempts})
+                           "include_pending": bool(a.include_pending), "offline": bool(a.offline), "max_attempts": max_attempts})
         client = None
         if plan.calls and not a.offline:
             client = EdinetClient(api_key=key, cache_dir=cache, min_interval=s.api.min_interval,

@@ -1,4 +1,5 @@
 """M2 Step G: `fetch` (filing_selection cur/prev bodies) and the fetches retry queue (plan §3-2, §6-2〜6-4)."""
+import http.client
 import io
 import json
 import logging
@@ -170,6 +171,17 @@ def test_network_error_is_transient_and_masked(tmp_path, caplog):
     r = rows(conn)["D0000001"]
     assert (r["status"], r["error_kind"]) == ("retry", "transient")
     assert KEY not in r["last_error"] and KEY not in caplog.text and KEY not in json.dumps(res.retry)
+
+
+def test_truncated_body_is_transient_and_run_continues(tmp_path):
+    # http.client.IncompleteRead from r.read() aborted the whole real run before it was caught (batch 3)
+    conn = setup_db(tmp_path, docs=(("E00001", "cur", "D0000001", "1"), ("E00002", "cur", "D0000003", "1")))
+    fake = Fake([http.client.IncompleteRead(b"x" * 10, 20), ZIP])
+    run_fetch(conn, tmp_path, client(tmp_path, fake))
+    r = rows(conn)
+    assert (r["D0000001"]["status"], r["D0000001"]["error_kind"]) == ("retry", "transient")
+    assert "IncompleteRead" in r["D0000001"]["last_error"] or "network error" in r["D0000001"]["last_error"]
+    assert r["D0000003"]["status"] == "ok"
 
 
 def test_interval_at_least_one_second(tmp_path):

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import logging
@@ -223,7 +224,8 @@ class EdinetClient:
             t0 = time.monotonic()
             try:
                 resp = self.transport(url, headers, self.timeout)
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as e:
+                # HTTPException: e.g. IncompleteRead when the body is cut off mid-transfer
                 # str(e) never contains the URL from urllib, but mask anyway
                 raise EdinetError(f"network error: {mask_url(str(e))} url={masked}", url=masked) from None
             self.calls += 1

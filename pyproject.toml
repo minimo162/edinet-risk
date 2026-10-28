@@ -7,7 +7,7 @@ name = "edinet-risk"
 version = "0.0.1"
 description = "EDINET 有報「事業等のリスク」比較ツール (M0 spike)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["openpyxl"]  # Excel output (report, monitor) and the JPX xlsx (plan §7)
 
 [project.optional-dependencies]
 dev = ["pytest", "scipy"]  # scipy: test oracle only (plan §7), never a runtime dependency
