@@ -52,6 +52,7 @@ class Paths:
     cache_dir: str = "cache"    # M0 response cache (doclist JSON / ZIP), reused offline
     filing_filter: str = "config/filing_filter.toml"
     thresholds: str = "config/thresholds.toml"
+    monitor: str = "config/monitor.toml"     # monitor thresholds (§8-3)
     api_key_file: str = ""      # optional; must live outside the distribution directory (§6-8)
 
     def _under(self, value: str, default: str) -> Path:

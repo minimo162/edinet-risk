@@ -13,6 +13,7 @@ log_dir = ""             # 空 = {data_dir}/logs
 cache_dir = "cache"      # M0 の応答キャッシュ（オフライン再利用）
 filing_filter = "config/filing_filter.toml"
 thresholds = "config/thresholds.toml"
+monitor = "config/monitor.toml"     # 監視指標の閾値（§8-3）
 api_key_file = ""        # 任意。配布ディレクトリの外に置くこと
 
 [api]

@@ -1,0 +1,31 @@
+# 監視指標の閾値（計画 §8-3、M2-8）。`monitor --fail-on-threshold` は、ここで閾値を持つ指標が
+# 超過したときに終了コード 2 を返す。値を変えたら version も上げること（monitor.json・runs に記録される）。
+version = "m2-initial"
+
+# 全体の指標: 指標ID = 閾値。match_rate は下限（下回ったら超過）、それ以外は上限（上回ったら超過）。
+# ここに無い指標は「一覧化」だけ（超過にしない）。指標ID は monitor_summary.csv の metric 列。
+[thresholds]
+match_rate = 0.99        # 突合率（当期の有報を取得・抽出済み ÷ 母集団）99% 未満
+unknown = 0              # 突合・前期なしの unknown（全件を人が確認）
+fetch_failed = 0         # 取得失敗（再試行の後）
+empty_extract = 0        # 空抽出（TextBlock なし・空文字）
+multi_hit = 0            # TextBlock の複数ヒット
+api_429_5xx = 0          # 429・5xx の発生回数
+# 一覧化だけの指標も、件数の上限を書けば超過の対象になる。例:
+# form_out_of_scope = 0
+# "flag.prev_gap" = 0
+# chars_prev_change = 0
+
+# 絞り込みで除外した様式（docType/ordinance/form）の件数: 前回の monitor からの急変
+[excluded_form]
+change_ratio = 0.5       # |今回 - 前回| / 前回 がこれを超え、
+change_min = 10          # かつ差の絶対値がこれ以上なら超過
+
+# 会社単位の目安（M1 の指標。該当会社を詳細シートに一覧化する）
+[entity]
+items_min = 1            # 項目数がこれ以下
+items_max = 60           # 項目数がこれ以上
+items_prev_change = 0.5  # 項目数の前期比 ±50% 超
+chars_prev_change = 0.4  # 文字数の前期比 ±40% 超
+image_text_max_chars = 2000   # 画像あり かつ 文字数がこれ未満
+review_ratio_max = 0.30  # 対応付けの「要確認」比率が会社単位でこれ超

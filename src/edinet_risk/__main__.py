@@ -121,6 +121,19 @@ def main(argv=None) -> int:
                                                              "(default: paths.cache_dir)")
     fe.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
     fe.add_argument("--db", type=Path, default=None, help="database path (overrides paths.db)")
+    mo = sub.add_parser("monitor", help="§8-3 monitoring metrics of a resolve run -> Excel + CSV (plan §3-2, M2-8; "
+                                        "offline, never calls the API)")
+    mo.add_argument("--run", default=None, metavar="RUN_ID",
+                    help="resolve run whose filing_selection is monitored (default: latest ok)")
+    mo.add_argument("--fail-on-threshold", action="store_true", help="exit code 2 when any threshold is breached")
+    mo.add_argument("--thresholds", type=Path, default=None,
+                    help="monitor thresholds TOML (default: paths.monitor = config/monitor.toml)")
+    mo.add_argument("--since", default=None, help="count 429/5xx only in api_calls at or after this ISO date/time "
+                                                  "(default: all)")
+    mo.add_argument("--filter", type=Path, default=Path("config/filing_filter.toml"))
+    mo.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    mo.add_argument("--db", type=Path, default=None, help="database path (overrides paths.db)")
+    mo.add_argument("--out", type=Path, default=Path("out/m2"), help="writes <out>/monitor_<run-id>/")
     mr = sub.add_parser("m1_resolve", help="M1: adopted version + previous period for the 7 filers (offline)")
     mr.add_argument("--targets", type=Path, default=Path("config/transport7.toml"))
     mr.add_argument("--config", type=Path, default=None, help="settings TOML (as_of, windows, [resolve])")
@@ -192,6 +205,8 @@ def _dispatch(a) -> int:
         return _resolve(a)
     if a.cmd == "fetch":
         return _fetch(a)
+    if a.cmd == "monitor":
+        return _monitor(a)
     if a.cmd == "m1_resolve":
         return _m1_resolve(a)
     if a.cmd == "m1_segment":
@@ -741,6 +756,73 @@ def _fetch(a) -> int:
     if res.stopped == "auth":
         return 4
     return 0 if ok else 2
+
+
+def _monitor(a) -> int:
+    import uuid
+    from datetime import datetime
+    from .config import ConfigError, api_key, load_settings
+    from .ingest.fetch import latest_resolve_run, scrub
+    from .monitor import metrics, output
+    from .resolve import runner
+    from .resolve.versions import FilingFilter
+    from .store import db
+    try:
+        s = load_settings(a.config)
+        mpath = a.thresholds or (Path(s.paths.monitor) if Path(s.paths.monitor).exists() else None)
+        cfg = metrics.load_config(mpath)
+        flt = FilingFilter.from_toml(a.filter) if a.filter.exists() else FilingFilter()
+        try:
+            key = api_key(s)        # only to scrub it from the outputs; never printed
+        except ConfigError:
+            key = ""
+    except ConfigError as e:
+        logging.error("%s", e)
+        return 2
+    path = a.db or s.paths.db_path
+    if not Path(path).exists():
+        logging.error("database not found: %s", path)
+        return 2
+    with forbid_network():          # the database is the only input
+        conn = db.open_db(path)
+        try:
+            resolve_run = a.run or latest_resolve_run(conn)
+            if resolve_run is None:
+                logging.error("no ok resolve run with filing_selection rows; run `resolve` first")
+                return 2
+            fy = conn.execute("SELECT fy FROM runs WHERE run_id = ?", (resolve_run,)).fetchone()
+            fy = fy[0] if fy else None
+            window = None if not fy else (s.window.current if fy == s.run.fy else runner.fy_window(fy))
+            run_id = "monitor-" + datetime.now(db.JST).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:4]
+            previous = metrics.previous_monitor_run(conn)
+            rep = metrics.compute(conn, resolve_run, cfg=cfg, flt=flt, window=window, since=a.since, run_id=run_id,
+                                  previous=previous)
+            db.start_run(conn, run_id, "monitor", code_version=metrics.PROCESSOR_VERSION, fy=fy,
+                         as_of=rep.meta.get("as_of"),
+                         args={"resolve_run": resolve_run, "config_version": cfg.version, "since": a.since,
+                               "previous_monitor_run": previous})
+            metrics.save(conn, rep)
+            db.finish_run(conn, run_id, "ok")
+        except ValueError as e:
+            logging.error("%s", e)
+            return 2
+        finally:
+            conn.close()
+    paths = output.write(rep, a.out / f"monitor_{run_id}", key=key)
+    print(f"monitor resolve run {resolve_run} ({rep.meta.get('scope')}, FY {rep.meta.get('fy')}, "
+          f"T={rep.meta.get('as_of')}) thresholds {cfg.version} run_id={run_id}")
+    shown = ("match_rate", "adopted_rate", "unmatched", "unknown", "form_out_of_scope", "fetch_failed", "fetch_pending",
+             "empty_extract", "extract_missing", "multi_hit", "api_429_5xx")
+    for m in rep.metrics:
+        if m.metric in shown or m.breached:
+            v = "-" if m.value is None else (f"{m.value:.4f}" if not float(m.value).is_integer() else f"{m.value:g}")
+            print(f"  {'BREACH ' if m.breached else ''}{m.metric}={v}"
+                  + (f" (threshold {m.threshold:g})" if m.threshold is not None else "")
+                  + (f" {scrub(m.note, key)}" if m.note else ""))
+    print(f"details={len(rep.details)} rows; breached={len(rep.breached)}: "
+          + (", ".join(m.metric for m in rep.breached) or "none"))
+    print(f"outputs: {paths['xlsx']} {paths['summary_csv']} {paths['details_csv']}")
+    return 2 if a.fail_on_threshold and rep.breached else 0
 
 
 def _m1_resolve(a) -> int:
