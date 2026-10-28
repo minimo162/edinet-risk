@@ -1,7 +1,7 @@
 # M0 スパイク調査結果（spike-findings）
 
 対象: `implementation-plan.md` §4 M0 および §10-3「M0で確かめる未確認事項」。
-実施環境: 開発機（Linux、venv の CPython 3.12）。**社内PC・embeddable Python では未実施**（§6 参照）。
+実施環境: 社外の開発環境（venv の CPython 3.12）。**社内PC・embeddable Python では未実施**（§6 参照）。
 API 呼び出し: 計 456 回（type=2 書類一覧 395、type=1 XBRL 26、type=5 CSV 35）、すべて HTTP 200、429 は 0 回。
 呼び出し間隔は 1 秒以上（自主制限）、応答は `cache/` に保存し再実行時は再取得しない。ログ上の URL は APIキーをマスク済み。
 

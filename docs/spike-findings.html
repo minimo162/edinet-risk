@@ -2,7 +2,7 @@
 <style>body{font-family:Noto Sans CJK JP,Noto Sans JP,DejaVu Sans,sans-serif;line-height:1.55;max-width:960px;margin:2rem auto;padding:0 1rem}
 table{border-collapse:collapse;width:100%;font-size:0.9rem}th,td{border:1px solid #ccc;padding:0.35rem 0.5rem;vertical-align:top}th{background:#f3f3f3}</style></head><body><h1>M0 スパイク調査結果（spike-findings）</h1>
 <p>対象: <code>implementation-plan.md</code> §4 M0 および §10-3「M0で確かめる未確認事項」。
-実施環境: 開発機（Linux、venv の CPython 3.12）。<strong>社内PC・embeddable Python では未実施</strong>（§6 参照）。
+実施環境: 社外の開発環境（venv の CPython 3.12）。<strong>社内PC・embeddable Python では未実施</strong>（§6 参照）。
 API 呼び出し: 計 456 回（type=2 書類一覧 395、type=1 XBRL 26、type=5 CSV 35）、すべて HTTP 200、429 は 0 回。
 呼び出し間隔は 1 秒以上（自主制限）、応答は <code>cache/</code> に保存し再実行時は再取得しない。ログ上の URL は APIキーをマスク済み。</p>
 <p>根拠データ（すべて <code>out/m0/</code>）:</p>
