@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全体像｜edinet-risk × Microsoft 365 Copilot</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d0d7de; --card: #f6f8fa;
+    --done: #1a7f37; --done-bg: #dafbe1;
+    --wip: #9a6700;  --wip-bg: #fff8c5;
+    --todo: #57606a; --todo-bg: #eaeef2;
+    --ms: #0969da;   --ms-bg: #ddf4ff;
+    --key: #cf222e;  --key-bg: #ffebe9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --card: #161b22;
+      --done: #3fb950; --done-bg: #12261e;
+      --wip: #d29922;  --wip-bg: #272115;
+      --todo: #9198a1; --todo-bg: #21262d;
+      --ms: #58a6ff;   --ms-bg: #121d2f;
+      --key: #f85149;  --key-bg: #2d1416;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: "Yu Gothic UI", "Meiryo", "Hiragino Sans", system-ui, sans-serif;
+    line-height: 1.65; font-size: 15px;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.2rem; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1rem; margin: 0 0 6px; }
+  p, li { margin: 4px 0; }
+  ul, ol { padding-left: 1.3em; margin: 6px 0; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: .9em;
+         background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .sub { color: var(--muted); font-size: .9rem; }
+  .lead { font-size: 1.05rem; padding: 14px 16px; border-left: 4px solid var(--ms);
+          background: var(--ms-bg); border-radius: 6px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card.done { border-left: 5px solid var(--done); }
+  .card.wip  { border-left: 5px solid var(--wip); }
+  .card.todo { border-left: 5px dashed var(--todo); }
+  .card.ms   { border-left: 5px solid var(--ms); }
+  .card.key  { border-left: 5px solid var(--key); }
+  .where { color: var(--muted); font-size: .85rem; margin-bottom: 6px; }
+  .badge { display: inline-block; font-size: .75rem; font-weight: 600; padding: 1px 8px;
+           border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+  .b-done { color: var(--done); background: var(--done-bg); }
+  .b-wip  { color: var(--wip);  background: var(--wip-bg); }
+  .b-todo { color: var(--todo); background: var(--todo-bg); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .85rem; color: var(--muted); margin-bottom: 10px; }
+
+  /* データの流れ */
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+  .step { flex: 1 1 150px; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 10px 12px; position: relative; }
+  .step.todo { border-style: dashed; }
+  .step .n { font-weight: 700; color: var(--muted); font-size: .8rem; }
+  .step .zone { font-size: .75rem; color: var(--muted); }
+  .arrow { align-self: center; color: var(--muted); font-size: 1.2rem; }
+  .zones { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-top: 14px; }
+  .zone-box { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .zone-box h3 { font-size: .9rem; }
+  .zone-box.corp { border-color: var(--done); }
+  .zone-box.m365 { border-color: var(--ms); }
+  .zone-box.ext  { border-color: var(--todo); }
+  .warn { color: var(--key); font-weight: 600; }
+  .user-steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; margin: 12px 0; }
+  .user-steps .step { border-color: var(--ms); }
+
+  /* 進捗バー */
+  .progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 6px 0 16px; }
+  .progress div { text-align: center; font-size: .8rem; padding: 6px 2px; border-radius: 6px; }
+  .p-done { background: var(--done-bg); color: var(--done); font-weight: 600; }
+  .p-wip  { background: var(--wip-bg);  color: var(--wip);  font-weight: 600; }
+  .p-todo { background: var(--todo-bg); color: var(--todo); border: 1px dashed var(--todo); }
+
+  .steps-ol { counter-reset: s; list-style: none; padding: 0; }
+  .steps-ol li { counter-increment: s; padding: 8px 12px 8px 44px; position: relative;
+                 border: 1px dashed var(--todo); border-radius: 8px; margin: 6px 0; background: var(--card); }
+  .steps-ol li::before { content: counter(s); position: absolute; left: 12px; top: 8px; width: 22px; height: 22px;
+                         border-radius: 50%; background: var(--todo-bg); color: var(--fg); font-weight: 700;
+                         font-size: .8rem; display: flex; align-items: center; justify-content: center; }
+  .decide { margin-top: 12px; }
+  footer { margin-top: 40px; font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>全体像：edinet-risk × Microsoft 365 Copilot</h1>
+<div class="sub">更新 2026-10-29 ／ 文章版は <code>overview.md</code></div>
+
+<!-- 目的 -->
+<h2>目的</h2>
+<p class="lead">
+  有価証券報告書「<b>事業等のリスク</b>」が前期から当期でどう変わったかを、
+  社内の誰でも <b>M365 Copilot Chat に統合プロンプト1本を貼るだけ</b> で読めるようにする。
+  1回の回答で変化表・マツダ比較・要確認リストがまとめて返る。
+</p>
+<h3>利用者の操作（これだけ）</h3>
+<div class="user-steps">
+  <div class="step"><div class="n">1</div><b>コピー</b><div class="zone">共有 Teams チャネルのピン留め投稿「EDINET リスク分析プロンプト」</div></div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="n">2</div><b>貼って送信</b><div class="zone">M365 Copilot Chat（Teams の Copilot か microsoft365.com）。社を指定するときだけ1行目に書く</div></div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="n">3</div><b>読む</b><div class="zone">変化表・マツダ比較・要確認リスト（対象外の社は冒頭に表示）</div></div>
+</div>
+<p class="sub">SharePoint は管理者が結果ファイルを置く裏側の置き場。<span class="warn">利用者は開かない</span>（Copilot がプロンプト内のリンクから読む）。設計上の想定で、公開フォルダとピン留め投稿は未作成。</p>
+<ul>
+  <li>対象は利用者が指定する社（最大10社）。指定がなければマツダ同業ピア（<code>config/transport7.toml</code>）。</li>
+  <li>プライム全社の抽出はバッチ専用（チャットでは扱わない）。</li>
+</ul>
+
+<!-- 誰が何をするか -->
+<h2>誰が何をするか</h2>
+<div class="grid">
+  <div class="card ms">
+    <h3>一般ユーザ</h3>
+    <div class="where">自分の Windows PC ＋ M365 Copilot Chat</div>
+    <p>Teams のピン留め投稿から統合プロンプト1本をコピーし、Copilot Chat に貼って送る。</p>
+    <p class="sub">SharePoint は開かない。キーも Python も不要</p>
+  </div>
+  <div class="card key">
+    <h3>管理者</h3>
+    <div class="where">社内の管理用 Windows PC ＋ SharePoint</div>
+    <p>週次バッチ（取得→抽出→対応付け→監視）を回し、結果を SharePoint に置く。利用者に閲覧権限を付け、リンク入りプロンプトを Teams にピン留めする。</p>
+    <p class="sub">APIキーを保管するのはここだけ</p>
+  </div>
+  <div class="card ms">
+    <h3>Microsoft 365 Copilot</h3>
+    <div class="where">Microsoft 365 側</div>
+    <p>プロンプト内のリンクから SharePoint のファイルを利用者の権限で読み、外部通信できない隔離実行環境で集計し直して答える。</p>
+    <p class="sub warn">EDINET には届かない</p>
+  </div>
+  <div class="card done">
+    <h3>開発</h3>
+    <div class="where">開発環境（このボットのコンピュータ・社外）</div>
+    <p>CLI を作り GitHub に push する。</p>
+    <p class="sub">社内の機械ではない</p>
+  </div>
+</div>
+
+<!-- データの流れ -->
+<h2>データの流れ（週次・MVP 完成後）</h2>
+<div class="legend"><span>実線＝できている</span><span>点線＝これから作る</span></div>
+<div class="flow">
+  <div class="step done"><div class="n">1</div><b>EDINET API</b><div class="zone">社外・取得は確認済み</div></div>
+  <div class="arrow">→</div>
+  <div class="step todo"><div class="n">2</div><b>publish_peer.ps1</b><div class="zone">管理用 Windows・タスクスケジューラで週次</div></div>
+  <div class="arrow">→</div>
+  <div class="step todo"><div class="n">3</div><b>抽出→対応付け→監視</b><div class="zone">SQLite に保存</div></div>
+  <div class="arrow">→</div>
+  <div class="step todo"><div class="n">4</div><b>SharePoint</b><div class="zone">publish_peer が CLI 出力を正規名 risk_diff.xlsx / monitor.xlsx / 社一覧.xlsx / 社別 md / 週次要約.md にリネームして配置（管理者のみが触る。正規名は publish_peer.spec.md）</div></div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="n">5</div><b>M365 Copilot Chat</b><div class="zone">統合プロンプト1本を受け、リンク先を読んで集計</div></div>
+  <div class="arrow">→</div>
+  <div class="step"><div class="n">6</div><b>一般ユーザ</b><div class="zone">1回の回答で変化表・マツダ比較・要確認</div></div>
+</div>
+<p class="sub">対象外の社 → 共有 Teams チャネルで依頼 → 次回バッチで追加。キーは環境変数かキーファイルから読む。</p>
+
+<div class="zones">
+  <div class="zone-box ext">
+    <h3>社外</h3>
+    <ul><li>EDINET API</li><li>GitHub（minimo162/edinet-risk, main = <code>e417520</code>）</li><li>開発環境（このボットのコンピュータ）</li></ul>
+  </div>
+  <div class="zone-box corp">
+    <h3>社内（Windows のみ）</h3>
+    <ul><li>管理用 Windows（バッチ・SQLite・APIキー）</li><li>SharePoint 公開フォルダ（管理者が置く・利用者は閲覧権限のみ）</li><li>共有 Teams チャネル（統合プロンプトのピン留め・依頼窓口）</li><li>一般ユーザの PC</li></ul>
+  </div>
+  <div class="zone-box m365">
+    <h3>Microsoft 365</h3>
+    <ul><li>M365 Copilot Chat（利用者が統合プロンプト1本を貼る先）</li><li>コードインタープリタ（外部通信できない隔離実行環境）</li></ul>
+    <p class="warn">× ここから EDINET へは通信できない</p>
+  </div>
+</div>
+
+<!-- 進捗 -->
+<h2>進捗</h2>
+<div class="progress">
+  <div class="p-done">M0 調査 ✔</div>
+  <div class="p-done">M1 7社再現 ✔</div>
+  <div class="p-wip">M2 プライム拡大 …</div>
+  <div class="p-todo">Copilot 公開</div>
+</div>
+<div class="grid">
+  <div class="card done">
+    <h3><span class="badge b-done">できている</span>M0 調査</h3>
+    <p>API・CSV/XBRL・様式コードを確認（API 456回）。</p>
+  </div>
+  <div class="card done">
+    <h3><span class="badge b-done">できている</span>M1 7社の再現</h3>
+    <p>版選択→分割→対応付け→差分→SQLite→Excel/HTML。<code>run --offline</code> は何度回しても同じ結果。</p>
+  </div>
+  <div class="card wip">
+    <h3><span class="badge b-wip">途中</span>M2 プライム拡大</h3>
+    <p>1,543社、取得・抽出 3,358件、突合率 99.55%、monitor あり、pytest 346 passed。第3バッチまで。</p>
+    <p class="sub">合格宣言はまだ（人手確認待ち: unknown 6社・late 1社 ほか）</p>
+  </div>
+  <div class="card wip">
+    <h3><span class="badge b-wip">途中</span>Copilot 設計ドキュメント</h3>
+    <p>一式を書いたが未 push。</p>
+  </div>
+  <div class="card todo">
+    <h3><span class="badge b-todo">これから</span>公開の仕組み</h3>
+    <p><code>publish_peer.ps1</code>（仕様とリネーム表は <code>publish_peer.spec.md</code>。<code>社一覧.xlsx</code>・社別 md・<code>週次要約.md</code> は CLI 未出力でここで生成）・管理者 Runbook・SharePoint 公開フォルダと閲覧権限・リンク入り統合プロンプトの Teams ピン留め・Teams 依頼窓口。</p>
+  </div>
+  <div class="card todo">
+    <h3><span class="badge b-todo">これから</span>社内 Windows で動作確認</h3>
+    <p>これまでは社外の開発環境だけで検証。</p>
+  </div>
+</div>
+
+<!-- 制約 -->
+<h2>制約（守ること）</h2>
+<div class="grid">
+  <div class="card">
+    <h3>社内 PC は Windows のみ</h3>
+    <p>利用者も管理者も Windows。「開発環境」は社外、「隔離実行環境」は M365 Copilot 側の機能で、どちらも社内の機械ではない。</p>
+  </div>
+  <div class="card key">
+    <h3>APIキーの渡し方は2つだけ</h3>
+    <p><code>EDINET_API_KEY</code> か <code>paths.api_key_file</code>。</p>
+    <p class="warn">設定ファイル・プロンプト・チャット・SharePoint・Teams・Git に置かない</p>
+  </div>
+  <div class="card ms">
+    <h3>製品は Microsoft 365 Copilot</h3>
+    <p>GitHub Copilot ではない。Copilot は EDINET に届かないので、取得は必ず管理用 Windows のバッチ。</p>
+  </div>
+</div>
+
+<!-- 次のMVP -->
+<h2>次の MVP（この順番で）</h2>
+<ol class="steps-ol">
+  <li><code>publish_peer.ps1</code> を作り、社内 Windows で動かす</li>
+  <li>タスクスケジューラ＋SharePoint 同期で週次公開</li>
+  <li>統合プロンプトに実リンクを入れ、共有 Teams チャネルにピン留め</li>
+  <li><code>docs/admin-runbook.md</code>・キー配置手順・離任前チェックリスト</li>
+  <li>非エンジニア1名でパイロットし、つまずきを反映（最初に「リンクだけで Copilot が読めるか」を確認: <code>copilot-runbook.md</code>「パイロット第1確認」）</li>
+  <li>（任意）Copilot Studio エージェント化</li>
+</ol>
+<div class="card wip decide">
+  <h3>決めること</h3>
+  <p>管理用 Windows の機械 ／ SharePoint の場所と利用者グループの閲覧権限 ／ 更新頻度 ／ 依頼窓口（Teams かフォームか）／ Studio 化の有無</p>
+</div>
+
+<footer>詳細: easiest-path.md（運用方式）・copilot-runbook.md（統合プロンプト）・copilot-chat-specs.md（M365 の仕様）・copilot-architecture.md（構成）・m1-progress.md / m2-progress.md（開発記録）</footer>
+</main>
+</body>
+</html>

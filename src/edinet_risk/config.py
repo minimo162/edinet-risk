@@ -139,6 +139,16 @@ class Logging:
 
 
 @dataclass
+class Publish:
+    """scripts/publish_peer.ps1 (docs/publish_peer.spec.md): weekly peer outputs under canonical names."""
+    dest_dir: str = ""                  # SharePoint sync folder ("" -> build publish/ only, never copied)
+    work_dir: str = "publish"           # local publish/ (canonical names)
+    out_dir: str = "out/publish"        # CLI outputs of the weekly run (run folders)
+    targets: list[str] = field(default_factory=lambda: ["config/transport7.toml"])  # + 依頼社リスト
+    doclist_days: int = 8               # doclist sync covers today and the previous N-1 days
+
+
+@dataclass
 class Settings:
     paths: Paths = field(default_factory=Paths)
     api: Api = field(default_factory=Api)
@@ -147,6 +157,7 @@ class Settings:
     resolve: Resolve = field(default_factory=Resolve)
     llm: Llm = field(default_factory=Llm)
     logging: Logging = field(default_factory=Logging)
+    publish: Publish = field(default_factory=Publish)
     source: str = ""                    # file the settings were loaded from ("" = defaults)
 
     def to_dict(self) -> dict:
@@ -187,6 +198,11 @@ def _coerce(value: Any, default: Any, where: str) -> Any:
     elif isinstance(default, str):
         if isinstance(value, str):
             return value
+    elif isinstance(default, list):
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return list(value)
+        if isinstance(value, str):      # env override: "a.toml;b.toml"
+            return [v.strip() for v in value.split(";") if v.strip()]
     raise ConfigError(f"{where}: expected {type(default).__name__}, got {value!r}")
 
 
@@ -242,6 +258,8 @@ def _validate(s: Settings) -> None:
         raise ConfigError("resolve.partial_ratio must be in (0, 1]")
     if s.llm.adapter not in ("none", "replay", "http"):
         raise ConfigError(f"llm.adapter must be none|replay|http (got {s.llm.adapter!r})")
+    if not s.publish.targets or s.publish.doclist_days < 1:
+        raise ConfigError("publish: need at least one targets file and doclist_days >= 1")
 
 
 def _read_toml(path: Path) -> dict:

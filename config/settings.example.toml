@@ -60,3 +60,11 @@ api_key_env = "LLM_API_KEY"   # 環境変数名のみ
 
 [logging]
 level = "INFO"
+
+# 週次公開（scripts/publish_peer.ps1、docs/publish_peer.spec.md・docs/admin-runbook.md）
+[publish]
+dest_dir = ""            # SharePoint の同期フォルダ（例: C:\Users\<user>\<社名>\EDINETリスク - 公開）。空 = publish/ を作るだけでコピーしない
+work_dir = "publish"     # 正規名で置くローカルの publish/
+out_dir = "out/publish"  # 週次実行の CLI 出力（run ごとのフォルダ）
+targets = ["config/transport7.toml"]   # 対象社。依頼社リスト（例: "config/requests.toml"）をここに足す
+doclist_days = 8         # 書類一覧の同期範囲（当日を含む過去 N 日）

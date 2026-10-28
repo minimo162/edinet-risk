@@ -1,0 +1,28 @@
+# publish_peer 仕様（未実装・リネーム表）
+
+`scripts/publish_peer.ps1`（管理用 Windows・週次）の仕様。スクリプト本体は実装済み（社内 Windows での実機確認は未）。 本書の §1 が公開ファイルの正規名の唯一の定義で、`overview.md`・`easiest-path.md`・`copilot-runbook.md`・`copilot-architecture.md` はここを参照する。
+
+## 方針
+- CLI（`python -m edinet_risk`）の出力名は変えない。CLI は run ごとのフォルダに run 固有の名前で出す（例: `risk_diff_transport7.xlsx`、`monitor_<run-id>/monitor.xlsx`）。
+- `publish_peer.ps1` が CLI 出力を `publish/` に **正規名でコピー（リネーム）** し、`publish/` を SharePoint の公開フォルダへ同期する。
+- 公開フォルダの名前は固定。統合プロンプトのリンクは正規名を指すので、名前を変えるとリンクが切れる。上書き保存で更新する（削除→新規作成にしない。リンクが変わるため）。
+
+## 1. 正規名（公開フォルダ）とリネーム表
+
+| 正規名（公開フォルダ） | 元（CLI 出力） | 生成元コマンド | 状態 |
+|---|---|---|---|
+| `risk_diff.xlsx` | `<out>/run_<run-id>/risk_diff_transport7.xlsx` | `run` / `report` | CLI あり（リネームのみ） |
+| `monitor.xlsx` | `<out>/monitor_<run-id>/monitor.xlsx` | `monitor` | CLI あり（リネームのみ） |
+| `社一覧.xlsx` | `<out>/resolve_<run-id>/resolve.csv` を対象社で絞り込み | `resolve` | **CLI 未出力**。publish_peer が生成（列: 証券コード, 社名, EDINETコード, 当期書類, 当期期末, 前期書類, 前期期末, 更新日） |
+| `社別/<証券コード>_<社名>.md` | `<out>/run_<run-id>/compare.json`（前期/当期の項目本文） | `run` / `compare` | **CLI 未出力**。publish_peer（または今後 `report` に md 出力を追加）で生成 |
+| `週次要約.md` | `monitor.md` ＋ `reconcile.md` ＋ 対象社一覧 | `monitor` / `report` | **CLI 未出力**。publish_peer が連結して生成。xlsx をリンクで読めない場合の代替（`copilot-runbook.md`「パイロット第1確認」） |
+
+参考（公開しない）: `html/index.html`・`html/diff_NN_<社名>.html`（`report` の全文差分）、`reconcile.csv`/`.md`、`monitor_summary.csv`/`monitor_details.csv`/`monitor.json`。管理者の点検用。
+
+## 2. 処理順（案）
+1. キーを `EDINET_API_KEY` か `paths.api_key_file` から読む（スクリプトに書かない）。
+2. 対象社 = `config/transport7.toml` ＋ 依頼社リスト。
+3. `resolve` → `fetch` → `extract` → `run`（または `compare` → `report`）→ `monitor`。
+4. 各コマンドが出した最新の run フォルダを特定し、§1 の表どおり `publish/` に正規名で書く。
+5. 成功の定義: `publish/` の5種がそろい、`社一覧.xlsx` と `monitor.xlsx` の更新日が当日。1つでも欠けたら同期しない（前回分を残す）。
+6. `publish/` を SharePoint 同期フォルダへコピー。

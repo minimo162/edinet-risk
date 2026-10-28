@@ -1,0 +1,15 @@
+# 依頼社リストの雛形（scripts/publish_peer.ps1、docs/admin-runbook.md §3）。
+# config/requests.toml にコピーして社を足し、settings.toml の [publish] targets に
+# "config/requests.toml" を加える（targets = ["config/transport7.toml", "config/requests.toml"]）。
+# 1社 = [[filer]] 1つ。edinetCode か secCode（証券コード4桁）のどちらかが必須。
+# secCode だけのときは DB の edinet_codes（`codes sync` 済み）で EDINETコードと社名を引く。
+# label（社名）は省略可（省略時は EDINET の提出者名）。社別 md のファイル名に使う。
+# transport7 と重なる社は先に書いた方（transport7）が使われる。
+
+# [[filer]]
+# secCode = "7272"
+# label = "ヤマハ発動機"
+
+# [[filer]]
+# edinetCode = "E02143"
+# label = "いすゞ自動車"

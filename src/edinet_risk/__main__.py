@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -193,6 +194,31 @@ def main(argv=None) -> int:
     ru.add_argument("--out", type=Path, default=Path("out/m1"), help="writes <out>/run_<run-id>/")
     ru.add_argument("--run-id", default=None, help="default: JST timestamp + random suffix")
     ru.add_argument("--gold", type=Path, default=None, help="gold JSON from tools/gold_import.py (optional; not used in M1)")
+    pu = sub.add_parser("publish", help="weekly peer publication helpers for scripts/publish_peer.ps1 "
+                                        "(docs/publish_peer.spec.md; offline)")
+    pus = pu.add_subparsers(dest="publish_cmd", required=True)
+    pc = pus.add_parser("config", help="print the [publish] settings and resolved paths as JSON (never the API key)")
+    pc.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    pt = pus.add_parser("targets", help="merge publish.targets (transport7 + 依頼社リスト) into one targets TOML")
+    pt.add_argument("--targets", type=Path, nargs="+", default=None, help="default: settings publish.targets")
+    pt.add_argument("--out", type=Path, required=True, help="merged targets TOML to write")
+    pt.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    pt.add_argument("--db", type=Path, default=None, help="database for secCode lookup (overrides paths.db)")
+    pb = pus.add_parser("build", help="write 社一覧.xlsx, 社別/*.md, 週次要約.md into publish/ and print the "
+                                      "sources of risk_diff.xlsx / monitor.xlsx as JSON")
+    pb.add_argument("--out-root", type=Path, required=True, help="CLI output root (resolve_*/, m1/run_*/, monitor_*/)")
+    pb.add_argument("--resolve-run", required=True, help="resolve run id (monitor run is the newest for it)")
+    pb.add_argument("--compare-run", default=None, help="compare run id (default: = --resolve-run)")
+    pb.add_argument("--targets", type=Path, required=True, help="merged targets TOML (publish targets --out)")
+    pb.add_argument("--publish-dir", type=Path, required=True, help="local publish/ folder")
+    pb.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    pb.add_argument("--db", type=Path, default=None, help="database for 証券コード (overrides paths.db; read only)")
+    pb.add_argument("--templates", type=Path, default=Path("docs/templates"),
+                    help="Copilot 見本ブック (*.xlsx) copied to <publish-dir>/templates/ if the folder exists")
+    pb.add_argument("--today", type=_iso_date, default=None, help=argparse.SUPPRESS)  # tests
+    pk = pus.add_parser("check", help="success definition (spec §2-5): five files present, 社一覧/monitor of today")
+    pk.add_argument("--publish-dir", type=Path, required=True)
+    pk.add_argument("--today", type=_iso_date, default=None, help=argparse.SUPPRESS)  # tests
     a = ap.parse_args(argv)
     logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
@@ -218,6 +244,8 @@ def _dispatch(a) -> int:
         return _monitor(a)
     if a.cmd == "extract":
         return _extract(a)
+    if a.cmd == "publish":
+        return _publish(a)
     if a.cmd == "m1_resolve":
         return _m1_resolve(a)
     if a.cmd == "m1_segment":
@@ -667,6 +695,54 @@ def _resolve(a) -> int:
     for n in summ["entity_notes"]:
         print(f"  entity note: {json.dumps(n, ensure_ascii=False)}")
     print(f"outputs: {paths['md'].parent}")
+    return 0
+
+
+def _publish(a) -> int:
+    from . import peer_publish as publish
+    from .config import ConfigError, api_key, load_settings
+    from .store import db
+    if a.publish_cmd == "check":
+        bad = publish.check(a.publish_dir, a.today)
+        for b in bad:
+            print(f"  {b}")
+        print(f"publish check {a.publish_dir}: " + ("ok (5 files, 社一覧/monitor of today)" if not bad
+                                                     else f"NOT OK ({len(bad)} problem(s)); do not sync"))
+        return 0 if not bad else 2
+    try:
+        s = load_settings(a.config)
+        if a.publish_cmd == "config":
+            try:
+                key_source = "env" if os.environ.get("EDINET_API_KEY", "").strip() else (
+                    "file" if s.paths.api_key_file and api_key(s) else "none")
+            except ConfigError:
+                key_source = "unreadable_file"
+            p = s.publish
+            print(json.dumps({"dest_dir": p.dest_dir, "work_dir": p.work_dir, "out_dir": p.out_dir,
+                              "targets": p.targets, "doclist_days": p.doclist_days, "db": str(s.paths.db_path),
+                              "cache_dir": s.paths.cache_dir, "settings": s.source, "api_key_source": key_source}))
+            return 0
+        path = a.db or s.paths.db_path
+        if a.publish_cmd == "targets":
+            conn = db.connect(path) if Path(path).exists() else None
+            try:
+                filers, periods = publish.merge_targets(a.targets or [Path(t) for t in s.publish.targets], conn)
+            finally:
+                if conn is not None:
+                    conn.close()
+            publish.write_targets(a.out, filers, periods)
+            print(f"publish targets: {len(filers)} filer(s) -> {a.out}"
+                  + "".join(f"\n  {f.get('secCode', '-')} {f['edinetCode']} {f['label']}" for f in filers))
+            return 0
+        res = publish.build(a.publish_dir, a.out_root, a.resolve_run, a.targets, compare_run=a.compare_run,
+                            db_path=path, today=a.today, templates=a.templates)
+    except (ConfigError, publish.PublishError) as e:
+        logging.error("%s", e)
+        return 2
+    print(json.dumps({"publish_dir": str(res["publish_dir"]), "companies": res["companies"], "md": res["md"],
+                      "templates": res["templates"],
+                      "monitor_dir": str(res["monitor_dir"]),
+                      "copies": {k: str(v) for k, v in res["copies"].items()}}))
     return 0
 
 
