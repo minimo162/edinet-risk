@@ -10,6 +10,12 @@
     1つでも欠けたら同期フォルダへはコピーしない（前回分が残る）。
   - 取得ゲート（spec §2-3）: doclist sync が 0 以外で終わったら公開しない。fetch が終了コード 2 のとき、
     新規取得（fetched + adopted_from_cache）が 0 件なら公開しない。どちらも終了コード 1（同期しない）。
+  - 設定ゲート: -DryRun でも -NoSync でもないのに settings が見つからない、または publish.dest_dir が空なら
+    何も実行せず終了コード 1（公開したつもりで何も置かれない状態を成功にしない）。
+  - 基準日T: resolve には publish config の as_of（publish.as_of。既定 "today" = 当日 JST）を --as-of で渡す。
+    社一覧.xlsx の「基準日T」列と週次要約.md の見出しに出る。
+  - 書類一覧の範囲: publish config の doclist_from..doclist_to（まだ確定していない最も古い日から当日まで。
+    休んだ週の分も取り直す。上限 publish.doclist_max_days 日）。
   - 同期フォルダへは上書きコピーのみ（削除→新規作成にしない。リンクが変わるため）。
   - 手順の詳細は docs/admin-runbook.md。PowerShell 5.1 で動く書き方にしている（UTF-8 BOM 付きで保存すること）。
 
@@ -24,7 +30,7 @@
 .PARAMETER SkipDoclist
   書類一覧の同期を省く（キャッシュと DB にある書類だけで回す）。
 .PARAMETER NoSync
-  publish/ を作って点検するところまで。同期フォルダへはコピーしない。
+  publish/ を作って点検するところまで。同期フォルダへはコピーしない（settings・dest_dir がなくてもよい）。
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1 -DryRun
@@ -149,6 +155,20 @@ try {
         $(if ($DryRun) { " (DryRun)" } else { "" }), $(if ($cfg.settings) { $cfg.settings } else { "(既定値)" }),
         $Out, $Work, $(if ($Dest) { $Dest } else { "(未設定: コピーしない)" }))
     Write-Log ("API キー: {0}" -f $cfg.api_key_source)
+    Write-Log ("基準日T: {0}（publish.as_of。settings の run.as_of は {1}）" -f $cfg.as_of, $cfg.run_as_of)
+    foreach ($w in @($cfg.warnings)) {
+        if (-not $w) { continue }
+        $Script:Warnings.Add($w)
+        Write-Log ("    -> 警告: {0}" -f $w)
+    }
+    if (-not $DryRun -and -not $NoSync) {
+        if (-not $cfg.settings) {
+            throw "settings が見つかりません（config\settings.toml か -Config）。公開先が決まらないので止めます（docs/admin-runbook.md）。"
+        }
+        if (-not $Dest) {
+            throw "publish.dest_dir が空です。settings の [publish] dest_dir か -Dest に同期フォルダを指定してください（publish/ だけ作るなら -NoSync）。"
+        }
+    }
     if (-not $DryRun -and ($cfg.api_key_source -ne "env" -and $cfg.api_key_source -ne "file")) {
         throw "API キーがありません。EDINET_API_KEY 環境変数か settings の paths.api_key_file を設定してください（docs/admin-runbook.md）。"
     }
@@ -159,20 +179,21 @@ try {
     # ---- 1. 対象社（transport7 + 依頼社リスト）を1つの targets にまとめる
     Invoke-Cli "targets" (@("publish", "targets", "--out", $Targets) + $CfgArgs)
 
-    # ---- 2. 書類一覧（直近 doclist_days 日）
+    # ---- 2. 書類一覧（まだ確定していない最も古い日〜当日。少なくとも doclist_days 日、多くて doclist_max_days 日）
     if (-not $SkipDoclist) {
-        $from = (Get-Date).AddDays(-([int]$cfg.doclist_days - 1)).ToString("yyyy-MM-dd")
-        $to = (Get-Date).ToString("yyyy-MM-dd")
         # 書類一覧が取れない週は公開しない（終了コード 2 も失敗扱い。WarnCodes なし）
-        Invoke-Cli "doclist" (@("doclist", "sync", "--from", $from, "--to", $to) + $CfgArgs)
+        Invoke-Cli "doclist" (@("doclist", "sync", "--from", $cfg.doclist_from, "--to", $cfg.doclist_to) + $CfgArgs)
     }
 
-    # ---- 3. resolve → fetch → extract → resolve
-    Invoke-Cli "resolve(pre)" (@("resolve", "--targets", $Targets, "--run-id", $R1, "--out", $Out, "--cache", $Cache) + $CfgArgs)
+    # ---- 3. resolve → fetch → extract → resolve（基準日T = $cfg.as_of。週次は当日）
+    $AsOf = $cfg.as_of
+    Invoke-Cli "resolve(pre)" (@("resolve", "--targets", $Targets, "--run-id", $R1, "--out", $Out, "--cache", $Cache,
+        "--as-of", $AsOf) + $CfgArgs)
     Invoke-Cli "fetch" (@("fetch", "--targets", $Targets, "--run-id", $R1, "--include-pending") + $CfgArgs) -WarnCodes @(2)
     Assert-FetchGate
     Invoke-Cli "extract" (@("extract") + $CfgArgs)
-    Invoke-Cli "resolve" (@("resolve", "--targets", $Targets, "--run-id", $R2, "--out", $Out, "--cache", $Cache) + $CfgArgs)
+    Invoke-Cli "resolve" (@("resolve", "--targets", $Targets, "--run-id", $R2, "--out", $Out, "--cache", $Cache,
+        "--as-of", $AsOf) + $CfgArgs)
 
     # ---- 4. compare → report（risk_diff_transport7.xlsx）。本文は cache の type=1 ZIP から読む
     $resolveJson = Join-Path $Out ("resolve_{0}\resolve_transport7.json" -f $R2)
@@ -203,7 +224,7 @@ try {
     }
 
     # ---- 8. 同期フォルダへ上書きコピー
-    if ($NoSync -or -not $Dest) {
+    if ($NoSync -or -not $Dest) {   # -not $Dest はここでは -DryRun のときだけ（それ以外は 0. で止めている）
         Write-Log "同期フォルダへのコピーは省略（-NoSync または publish.dest_dir 未設定）。"
     } elseif ($DryRun) {
         foreach ($n in @("risk_diff.xlsx", "monitor.xlsx")) { Copy-Over (Join-Path $Work $n) (Join-Path $Dest $n) }

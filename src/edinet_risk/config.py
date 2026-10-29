@@ -145,7 +145,9 @@ class Publish:
     work_dir: str = "publish"           # local publish/ (canonical names)
     out_dir: str = "out/publish"        # CLI outputs of the weekly run (run folders)
     targets: list[str] = field(default_factory=lambda: ["config/transport7.toml"])  # + 依頼社リスト
-    doclist_days: int = 8               # doclist sync covers today and the previous N-1 days
+    doclist_days: int = 8               # doclist sync covers at least today and the previous N-1 days ...
+    doclist_max_days: int = 62          # ... and back to the oldest not-final cached day, at most N days
+    as_of: str = "today"                # base date T of the weekly resolve: "today" (JST) or "YYYY-MM-DD"
 
 
 @dataclass
@@ -260,6 +262,13 @@ def _validate(s: Settings) -> None:
         raise ConfigError(f"llm.adapter must be none|replay|http (got {s.llm.adapter!r})")
     if not s.publish.targets or s.publish.doclist_days < 1:
         raise ConfigError("publish: need at least one targets file and doclist_days >= 1")
+    if s.publish.doclist_max_days < s.publish.doclist_days:
+        raise ConfigError("publish: need doclist_max_days >= doclist_days")
+    if s.publish.as_of != "today":
+        try:
+            date.fromisoformat(s.publish.as_of)
+        except ValueError:
+            raise ConfigError(f'publish.as_of must be "today" or "YYYY-MM-DD" (got {s.publish.as_of!r})') from None
 
 
 def _read_toml(path: Path) -> dict:

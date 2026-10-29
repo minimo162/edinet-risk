@@ -197,8 +197,10 @@ def main(argv=None) -> int:
     pu = sub.add_parser("publish", help="weekly peer publication helpers for scripts/publish_peer.ps1 "
                                         "(docs/publish_peer.spec.md; offline)")
     pus = pu.add_subparsers(dest="publish_cmd", required=True)
-    pc = pus.add_parser("config", help="print the [publish] settings and resolved paths as JSON (never the API key)")
+    pc = pus.add_parser("config", help="print the [publish] settings, resolved paths, base date T (as_of) and the "
+                                       "doclist range as JSON (never the API key)")
     pc.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    pc.add_argument("--today", type=_iso_date, default=None, help=argparse.SUPPRESS)  # tests
     pt = pus.add_parser("targets", help="merge publish.targets (transport7 + 依頼社リスト) into one targets TOML")
     pt.add_argument("--targets", type=Path, nargs="+", default=None, help="default: settings publish.targets")
     pt.add_argument("--out", type=Path, required=True, help="merged targets TOML to write")
@@ -718,8 +720,18 @@ def _publish(a) -> int:
             except ConfigError:
                 key_source = "unreadable_file"
             p = s.publish
+            today = a.today or publish.today_jst()
+            as_of = publish.as_of_date(p.as_of, today)
+            d_from, d_to, capped = publish.doclist_range(Path(s.paths.cache_dir), today, p.doclist_days,
+                                                         p.doclist_max_days)
+            warnings = (publish.as_of_warnings(as_of, s.run.as_of, s.window.current.submit_to)
+                        + publish.doclist_warnings(d_from, capped, p.doclist_max_days))
             print(json.dumps({"dest_dir": p.dest_dir, "work_dir": p.work_dir, "out_dir": p.out_dir,
-                              "targets": p.targets, "doclist_days": p.doclist_days, "db": str(s.paths.db_path),
+                              "targets": p.targets, "doclist_days": p.doclist_days,
+                              "doclist_max_days": p.doclist_max_days, "doclist_from": d_from.isoformat(),
+                              "doclist_to": d_to.isoformat(), "as_of": as_of.isoformat(),
+                              "run_as_of": s.run.as_of.isoformat(), "today": today.isoformat(),
+                              "warnings": warnings, "db": str(s.paths.db_path),
                               "cache_dir": s.paths.cache_dir, "settings": s.source, "api_key_source": key_source}))
             return 0
         path = a.db or s.paths.db_path

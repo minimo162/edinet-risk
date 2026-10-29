@@ -63,8 +63,10 @@ level = "INFO"
 
 # 週次公開（scripts/publish_peer.ps1、docs/publish_peer.spec.md・docs/admin-runbook.md）
 [publish]
-dest_dir = ""            # SharePoint の同期フォルダ（例: C:\Users\<user>\<社名>\EDINETリスク - 公開）。空 = publish/ を作るだけでコピーしない
+dest_dir = ""            # SharePoint の同期フォルダ（例: C:\Users\<user>\<社名>\EDINETリスク - 公開）。本実行では必須（空だと終了コード 1。publish/ だけ作るなら -NoSync）
 work_dir = "publish"     # 正規名で置くローカルの publish/
 out_dir = "out/publish"  # 週次実行の CLI 出力（run ごとのフォルダ）
 targets = ["config/transport7.toml"]   # 対象社。依頼社リスト（例: "config/requests.toml"）をここに足す
-doclist_days = 8         # 書類一覧の同期範囲（当日を含む過去 N 日）
+doclist_days = 8         # 書類一覧の同期範囲（最低: 当日を含む過去 N 日）。前回の同期で確定した日の翌日までは自動でさかのぼる
+doclist_max_days = 62    # さかのぼりの上限（休んだ週の取り戻し。超えたら警告し、手動の doclist sync で埋める）
+as_of = "today"          # 週次 resolve の基準日T。"today" = 実行日（JST）。"YYYY-MM-DD"（引用符付き）で固定（検証用）

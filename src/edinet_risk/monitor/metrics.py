@@ -175,13 +175,18 @@ def _population_size(conn: sqlite3.Connection, scope: str) -> int | None:
     return conn.execute("SELECT count(*) FROM population WHERE as_of_month = ?", (scope.split(":", 1)[1],)).fetchone()[0]
 
 
-def _names(conn: sqlite3.Connection, scope: str) -> tuple[dict[str, str], dict[str, str]]:
-    by_code = {r[0]: r[1] for r in conn.execute("SELECT edinet_code, name FROM edinet_codes")}
+def _names(conn: sqlite3.Connection, scope: str) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """({edinet_code: name}, {population key: name}, {edinet_code: 証券コード4桁})."""
+    by_code, by_sec = {}, {}
+    for code, sec5, name in conn.execute("SELECT edinet_code, sec_code5, name FROM edinet_codes"):
+        by_code[code] = name
+        if sec5:
+            by_sec[code] = sec5[:4]
     by_key = {}
     if scope.startswith("population:"):
         by_key = {r[0]: r[1] for r in conn.execute("SELECT sec_code4, name FROM population WHERE as_of_month = ?",
                                                    (scope.split(":", 1)[1],))}
-    return by_code, by_key
+    return by_code, by_key, by_sec
 
 
 def previous_monitor_run(conn: sqlite3.Connection, before: str | None = None) -> str | None:
@@ -211,13 +216,17 @@ def compute(conn: sqlite3.Connection, resolve_run: str, *, cfg: MonitorConfig | 
                                        "as_of": run["as_of"], "meta_synced_at": run["meta_synced_at"],
                                        "config_version": cfg.version, "config": cfg.source or "(defaults)",
                                        "since": since, "previous_monitor_run": previous})
-    by_code, by_key = _names(conn, scope)
+    by_code, by_key, by_sec = _names(conn, scope)
+    population = scope.startswith("population:")
 
     def who(ent: str) -> tuple[str, str]:
+        """(証券コード, 会社名). A population key is the 証券コード; a targets key is the label (会社名)."""
         e = sel.get(ent, {})
         t = (e.get("cur") or e.get("prev") or {}).get("basis", {}).get("reason_basis", {}).get("target", {})
-        key = t.get("key", "")
-        return key, by_key.get(key) or by_code.get(t.get("edinet_code") or ent, "") or ""
+        key, code = t.get("key", ""), t.get("edinet_code") or ent
+        if population:
+            return key, by_key.get(key) or by_code.get(code, "") or ""
+        return by_sec.get(code, ""), key or by_code.get(code, "") or ""
 
     def detail(category, metric, ent="", role="", doc="", value=None, threshold=None, text=""):
         key, name = who(ent) if ent else ("", "")

@@ -13,9 +13,10 @@
    .venv\Scripts\pip install -e .
    ```
 2. `config\settings.example.toml` を `config\settings.toml` にコピーし、`[publish]` を埋める:
-   - `dest_dir` … SharePoint の同期フォルダ（OneDrive クライアントで同期した公開フォルダのローカルパス。例: `C:\Users\<user>\<社名>\EDINETリスク - 公開`）。空なら `publish\` を作るだけでコピーしない。
+   - `dest_dir` … SharePoint の同期フォルダ（OneDrive クライアントで同期した公開フォルダのローカルパス。例: `C:\Users\<user>\<社名>\EDINETリスク - 公開`）。**必須**: 空のまま（または `settings.toml` がないまま）本実行すると、何もせず終了コード 1 で止まる。`publish\` を作るだけなら `-NoSync` を付ける。
    - `targets` … 既定は `["config/transport7.toml"]`。依頼社は §3 の `config/requests.toml` を配列に足す。
-   - `out_dir`（CLI 出力、既定 `out/publish`）・`work_dir`（正規名の `publish/`、既定 `publish`）・`doclist_days`（書類一覧の同期日数、既定 8）は既定のままで可。
+   - `out_dir`（CLI 出力、既定 `out/publish`）・`work_dir`（正規名の `publish/`、既定 `publish`）・`doclist_days`（書類一覧の最低同期日数、既定 8）・`doclist_max_days`（休んだ週を取り戻すときのさかのぼり上限、既定 62）は既定のままで可。
+   - `as_of` … 基準日T。既定 `"today"`（実行日。週次はこのまま）。`"2026-09-30"` のように固定すると毎週同じ T で解決する（再現・検証用。週次公開では使わない）。
 3. **API キー**（§2）を設定する。
 4. DB と初期データ（初回だけ。書類一覧の全期間同期は時間がかかる）:
    ```powershell
@@ -43,7 +44,7 @@
 
 ## 3. 依頼社の追加
 
-1. `config\requests.example.toml` を `config\requests.toml` にコピーし、`[[filer]]` を足す（`secCode`（証券コード4桁）か `edinetCode` のどちらか。`label` は社別 md の名前になる）。
+1. `config\requests.example.toml` を `config\requests.toml` にコピーし、`[[filer]]` を足す（`secCode`（証券コード4桁）か `edinetCode` のどちらか。`label` は社別 md の名前になる）。`社一覧.xlsx` の「区分」は、`targets` の1つ目（transport7）の社が `ピア`、2つ目以降（依頼社リスト）の社が `依頼`。個別に変えるときは `[[filer]]` に `group = "ピア"` か `group = "依頼"` を書く。Copilot は「対象:」が空欄なら区分=ピアの社だけを使う。
 2. `settings.toml` の `[publish]` を `targets = ["config/transport7.toml", "config/requests.toml"]` にする。
 3. `-DryRun` で確認し、次回の定期実行を待つか手動で実行する。`secCode` が見つからないときは `codes sync` を流し直す。
 
@@ -55,13 +56,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1 -Dr
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1           # 本実行
 ```
 
-オプション: `-Config <toml>`（既定 `config\settings.toml`）、`-Dest <フォルダ>`（`publish.dest_dir` の上書き）、`-Python <python.exe>`（既定 `.venv\Scripts\python.exe`）、`-SkipDoclist`（書類一覧の同期を省く）、`-NoSync`（`publish\` の作成と点検まで。同期フォルダへコピーしない）。
+オプション: `-Config <toml>`（既定 `config\settings.toml`）、`-Dest <フォルダ>`（`publish.dest_dir` の上書き）、`-Python <python.exe>`（既定 `.venv\Scripts\python.exe`）、`-SkipDoclist`（書類一覧の同期を省く）、`-NoSync`（`publish\` の作成と点検まで。同期フォルダへコピーしない。`dest_dir` が空でもよい）。`-DryRun`・`-NoSync` なしで `settings.toml` がない、または `dest_dir`（`-Dest`）が空なら終了コード 1。
 
 `publish_peer.ps1` が行うこと（既存 CLI をこの順に実行）:
 
 1. `publish targets`: transport7 ＋依頼社リストを `out\publish\targets.toml` にまとめる
-2. `doclist sync --from <今日-7日> --to <今日>`
-3. `resolve`（取得対象を決める）→ `fetch --include-pending` → `extract` → `resolve`（本文取得後。公開に使う）
+2. `doclist sync --from <doclist_from> --to <今日>`（`doclist_from` は `publish config` が決める: 前回の同期で確定した最後の日の翌日。休んだ週があれば自動でさかのぼる。最低 `doclist_days`・最大 `doclist_max_days` 日）
+3. `resolve --as-of <基準日T>`（取得対象を決める）→ `fetch --include-pending` → `extract` → `resolve --as-of <基準日T>`（本文取得後。公開に使う）。基準日T は `publish.as_of`（既定 = 実行日）。`社一覧.xlsx` の「基準日T」列と `週次要約.md` の見出しに出る
 4. `compare`（本文は `cache\docs\` の type=1 ZIP から読む）→ `report`（`risk_diff_transport7.xlsx`）→ `monitor`
 5. `publish build`: `社一覧.xlsx`・`社別\<証券コード>_<社名>.md`・`週次要約.md` を `publish\` に生成し、`docs\templates\*.xlsx` を `publish\templates\` にコピー。`risk_diff_transport7.xlsx` → `risk_diff.xlsx`、`monitor_<run-id>\monitor.xlsx` → `monitor.xlsx` にリネームしてコピー
 6. `publish check`: 5種がそろい、`社一覧.xlsx` と `monitor.xlsx` が当日付か。だめなら **同期しない**（前回分が残る）
@@ -78,15 +79,25 @@ GUI（タスクスケジューラ →「タスクの作成」）:
 | 全般 | 名前 `edinet-risk publish_peer`、実行ユーザー = §2 のキーを設定したユーザー、「ユーザーがログオンしているときのみ実行する」 |
 | トリガー | 毎週・月曜・7:30 |
 | 操作 | プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1"`、開始 `C:\edinet-risk` |
-| 設定 | 「タスクを停止するまでの時間」= 4時間、「既に実行中の場合」= 新しいインスタンスを開始しない |
+| 設定 | **「スケジュールされた時刻にタスクを開始できなかった場合、すぐにタスクを実行する」にチェック**（StartWhenAvailable。PC が止まっていた週も、次にログオンしたときに実行される）、「タスクを停止するまでの時間」= 4時間、「既に実行中の場合」= 新しいインスタンスを開始しない |
 
-コマンドで登録する場合（キーは引数に入れない）:
+コマンドで登録する場合（キーは引数に入れない。`schtasks` では StartWhenAvailable を付けられないので PowerShell で登録する）:
 
 ```powershell
-schtasks /Create /TN "edinet-risk publish_peer" /SC WEEKLY /D MON /ST 07:30 /IT /F `
-  /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\edinet-risk\scripts\publish_peer.ps1"
-schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
+$act = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory "C:\edinet-risk" `
+  -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\edinet-risk\scripts\publish_peer.ps1"
+$trg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:30
+$set = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName "edinet-risk publish_peer" -Action $act -Trigger $trg -Settings $set -Force   # 実行中のユーザー・ログオン時のみ
+Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1回試す
 ```
+
+### 休んだ週の取りこぼし（リスクと対処）
+
+- **リスク**: 書類一覧（doclist）はその日に提出された書類の一覧で、取得しなかった日の提出は DB に入らない。PC の停止・失敗で1週休むと、その週の提出（訂正報告書を含む）を取りこぼし、次の週の公開に出ないおそれがある。
+- **自動の対処**: `publish config` がキャッシュ（`cache\doclist\<日付>.json`）を見て、確定していない日（未取得、または当日に取得した日）を直近の確定日までさかのぼって同期範囲に入れる（上限 `doclist_max_days`、既定 62 日）。確定済みの日は再取得しないので、休んだ日数分の呼び出しだけ増える。StartWhenAvailable と組み合わせれば、PC が戻った日に取り戻せる。
+- **上限を超えたとき**: ログに「書類一覧は <日付> から同期します（publish.doclist_max_days=…）」の警告が出る。それより前の抜けは手動で埋める: `.venv\Scripts\python -m edinet_risk doclist sync --from <抜けの初日> --to <上限の前日>`。長く止めていたときは `doclist sync --rescan-month --window current` でも可（時間がかかる）。
+- 毎週、ログの「doclist sync range: days=… (<from>..<to>)」の範囲が前回実行日以前から始まっていることを見る（§6）。
 
 ## 6. 結果の確認（毎週）
 
@@ -94,7 +105,9 @@ schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
 - ログ: `out\publish\logs\publish_peer_<日時>.log`（キーは出ない）。
 - 「完了（警告 n 件…）」は続行できた警告（終了コード 2: fetch の一部失敗（新規取得が1件以上ある場合）、compare の前期なしで比較できない社、report の照合で全文一致しない社）。`monitor.xlsx` の要確認を見る。
 - doclist sync の失敗（終了コード 2 を含む）と、fetch の「新規取得 0 件でエラーあり」は失敗（終了コード 1、同期しない）。古いデータを当日分として公開しないため。
-- 公開フォルダの `社一覧.xlsx`・`monitor.xlsx` の更新日が当日になっていること。
+- 公開フォルダの `社一覧.xlsx`・`monitor.xlsx` の更新日が当日、`社一覧.xlsx` の「基準日T」が実行日になっていること。
+- 「警告: 基準日T … が当期の提出期間の終わり … を過ぎています」が出たら、年度の切り替え（`settings.toml` の `[run]` `fy`・`[window]`）を検討する。続行はする。
+- 「settings が見つかりません」「publish.dest_dir が空です」は設定の誤り（終了コード 1、何も実行していない）。§1 の 2. を見直す。
 
 ## 7. 失敗したとき
 

@@ -224,6 +224,30 @@ def test_lists_and_m1_anomalies(tmp_path):
     assert ("flag.prev_gap.prev", "E00001") in rows
 
 
+def test_targets_scope_key_is_sec_code(tmp_path):
+    """targets の resolve（key = 社名ラベル）でも、証券コード列は edinet_codes の4桁、会社名はラベル。"""
+    conn = make_db(tmp_path)
+    with db.transaction(conn):
+        conn.execute("UPDATE runs SET args_json = json_set(args_json, '$.scope', 'targets:t.toml') "
+                     "WHERE run_id = ?", (RUN,))
+        conn.execute("UPDATE filing_selection SET reason_basis_json = json_set(reason_basis_json, "
+                     "'$.reason_basis.target.key', 'ラベル1') WHERE entity_id = 'E00001'")
+        conn.execute("INSERT INTO edinet_codes (edinet_code, sec_code5, name, listed) "
+                     "VALUES ('E00001', '72610', 'EDINET名', 1)")
+        conn.execute("UPDATE filing_selection SET flags_json = '[\"prev_gap\"]', reason_basis_json = json_set("
+                     "reason_basis_json, '$.pair.gap_days', 10) WHERE entity_id = 'E00001' AND role = 'prev'")
+    conn.close()
+    assert run_monitor(tmp_path) == 0
+    with open(out_dir(tmp_path) / "monitor_details.csv", encoding="utf-8-sig") as f:
+        gap = next(r for r in csv.DictReader(f) if r["metric"] == "flag.prev_gap")
+    assert (gap["entity_id"], gap["key"], gap["name"]) == ("E00001", "7261", "ラベル1")
+    ws = load_workbook(out_dir(tmp_path) / "monitor.xlsx").worksheets[1]
+    head = [c.value for c in ws[1]]
+    assert "証券コード" in head
+    col = head.index("証券コード")
+    assert "7261" in [r[col] for r in ws.iter_rows(min_row=2, values_only=True)]
+
+
 def test_reasons_and_unmatched(tmp_path):
     conn = make_db(tmp_path)
     with db.transaction(conn):

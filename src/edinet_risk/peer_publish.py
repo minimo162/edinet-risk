@@ -4,13 +4,17 @@ Used through ``python -m edinet_risk publish {config,targets,build,check}``. The
 names; this module writes the files the CLI does not produce, under the canonical names of spec §1, into the
 local ``publish/`` folder:
 
-- ``社一覧.xlsx``: the target filers of the resolve run (証券コード, 社名, EDINETコード, 当期/前期の書類と期末, 更新日)
+- ``社一覧.xlsx``: the target filers of the resolve run (証券コード, 社名, 区分 ピア/依頼, EDINETコード, 当期/前期の
+  書類と期末, 基準日T, 更新日)
 - ``社別/<証券コード>_<社名>.md``: per filer the previous / current text of every matched item (compare.json)
 - ``週次要約.md``: 対象社一覧 + 変化表 + 要確認 + ``monitor.md`` + ``reconcile.md`` (fallback when xlsx can't be read)
 
 ``risk_diff.xlsx`` / ``monitor.xlsx`` are plain renamed copies, made by the PowerShell script from the source
 paths that ``build`` returns. ``check`` is the success definition of spec §2-5: all five present and
 ``社一覧.xlsx`` / ``monitor.xlsx`` written today; otherwise the sync folder keeps the previous week's files.
+
+``config`` also decides the weekly base date T (``publish.as_of``, default today in JST) and the doclist range
+(from the oldest not-final cached day, so a skipped week is caught up; ``doclist_range``).
 """
 from __future__ import annotations
 
@@ -19,9 +23,10 @@ import re
 import shutil
 import sqlite3
 import tomllib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .ingest.doclist import cached_fetched_at, is_final
 from .report.excel import CHANGE_JA, LABEL_JA, SOURCE_NOTICE, _header
 from .store.db import JST
 
@@ -32,7 +37,11 @@ PER_COMPANY = "社別"
 WEEKLY = "週次要約.md"
 TEMPLATES = "templates"       # optional (Copilot 見本ブック)
 CANONICAL = (RISK_DIFF, MONITOR, COMPANY_LIST, PER_COMPANY, WEEKLY)
-COMPANY_HEADER = ("証券コード", "社名", "EDINETコード", "当期書類", "当期期末", "前期書類", "前期期末", "更新日")
+COMPANY_HEADER = ("証券コード", "社名", "区分", "EDINETコード", "当期書類", "当期期末", "前期書類", "前期期末",
+                  "基準日T", "更新日")
+C_SEC, C_NAME, C_GROUP, C_CODE = 0, 1, 2, 3     # column indexes of a 社一覧 row
+PEER, REQUEST = "ピア", "依頼"                   # 区分: first publish.targets file (transport7) / the others
+AS_OF_STALE_DAYS = 92                           # warn when T is this far past settings run.as_of
 REPORT_XLSX = "risk_diff_transport7.xlsx"   # m1_report.XLSX_NAME (CLI output name)
 
 
@@ -42,6 +51,48 @@ class PublishError(Exception):
 
 def today_jst() -> date:
     return datetime.now(JST).date()
+
+
+# ---------------------------------------------------------------- base date T / doclist range (publish config)
+def as_of_date(setting: str, today: date) -> date:
+    """publish.as_of: "today" -> today (JST), else the fixed date."""
+    return today if setting == "today" else date.fromisoformat(setting)
+
+
+def as_of_warnings(as_of: date, run_as_of: date, submit_to: date) -> list[str]:
+    out = []
+    if as_of > submit_to:
+        out.append(f"基準日T {as_of} が当期の提出期間の終わり（window.current.submit_to {submit_to}）を過ぎています。"
+                   "それ以降の提出は当期に入りません。年度を切り替えるときは settings の run / window を更新してください。")
+    if (as_of - run_as_of).days > AS_OF_STALE_DAYS:
+        out.append(f"基準日T {as_of} が settings の run.as_of {run_as_of} を {AS_OF_STALE_DAYS} 日以上過ぎています。"
+                   "run.fy / window の設定が古くないか確認してください。")
+    return out
+
+
+def doclist_range(cache_dir: Path, today: date, days: int, max_days: int) -> tuple[date, date, bool]:
+    """(from, to, capped) for the weekly ``doclist sync``.
+
+    ``from`` = ``today - (days - 1)``, moved back over the days before it that are not final in the cache
+    (missing, or fetched on that day) up to the newest final day = the last successful sync. So a week that
+    was skipped (PC off, failed run) is caught up; ``doclist sync`` does not fetch final days again.
+    At most ``max_days`` days; ``capped`` = no final day was found within them (older days may be missing).
+    """
+    floor = today - timedelta(days=max_days - 1)
+    start = today - timedelta(days=days - 1)
+    while start > floor:
+        prev = start - timedelta(days=1)
+        if is_final(prev.isoformat(), cached_fetched_at(cache_dir, prev.isoformat())):
+            return start, today, False
+        start = prev
+    return start, today, max_days > days
+
+
+def doclist_warnings(start: date, capped: bool, max_days: int) -> list[str]:
+    if not capped:
+        return []
+    return [f"書類一覧は {start} から同期します（publish.doclist_max_days={max_days} 日が上限）。それより前に取得して"
+            "いない日があれば、`doclist sync --from <日付> --to <日付>` で埋めてください（docs/admin-runbook.md）。"]
 
 
 # ---------------------------------------------------------------- targets (transport7 + 依頼社リスト)
@@ -67,12 +118,14 @@ def merge_targets(paths: list[Path], conn: sqlite3.Connection | None = None) -> 
 
     A request entry may give ``secCode`` instead of ``edinetCode`` (looked up in edinet_codes); ``label``
     defaults to the EDINET name. ``secCode`` is filled in from edinet_codes when known.
+    ``group`` (社一覧の区分): the filer's own ``group = "ピア" | "依頼"``, else ピア for the first file (transport7)
+    and 依頼 for the others (依頼社リスト).
     """
     by_code, by_sec = sec_codes(conn)
     filers: list[dict] = []
     periods: list[dict] = []
     seen: set[str] = set()
-    for p in paths:
+    for n, p in enumerate(paths):
         try:
             with open(p, "rb") as f:
                 cfg = tomllib.load(f)
@@ -95,7 +148,10 @@ def merge_targets(paths: list[Path], conn: sqlite3.Connection | None = None) -> 
             seen.add(code)
             sec = sec or by_code.get(code, ("", ""))[0]
             label = str(f.get("label", "")).strip() or by_code.get(code, ("", ""))[1] or code
-            filers.append({"label": label, "edinetCode": code} | ({"secCode": sec} if sec else {}))
+            group = str(f.get("group", "")).strip() or (PEER if n == 0 else REQUEST)
+            if group not in (PEER, REQUEST):
+                raise PublishError(f'{p} filer #{i}: group must be "{PEER}" or "{REQUEST}", got {group}')
+            filers.append({"label": label, "edinetCode": code} | ({"secCode": sec} if sec else {}) | {"group": group})
         for per in cfg.get("period", []):
             if per not in periods:
                 periods.append(dict(per))
@@ -165,17 +221,19 @@ def locate(out_root: Path, resolve_run: str, compare_run: str | None = None) -> 
 
 # ---------------------------------------------------------------- 社一覧.xlsx
 def company_rows(resolve: dict, filers: list[dict], by_code: dict[str, tuple[str, str]], updated: date) -> list[list]:
-    """One row per resolve row, in the order of the targets; 社名 = targets label."""
+    """One row per resolve row (COMPANY_HEADER), in the order of the targets; 社名 = targets label,
+    区分 = targets group, 基準日T = the resolve run's as_of."""
     lab = {f["edinetCode"]: f for f in filers}
     rows = []
     for r in resolve["rows"]:
         code = r.get("edinet_code") or r.get("entity_id")
         f = lab.get(code, {})
         sec = f.get("secCode") or by_code.get(code, ("", ""))[0]
-        rows.append([sec or None, f.get("label") or r.get("name") or r.get("key"), code, r.get("cur_doc_id"),
-                     r.get("cur_period_end"), r.get("prev_doc_id"), r.get("prev_period_end"), updated.isoformat()])
+        rows.append([sec or None, f.get("label") or r.get("name") or r.get("key"), f.get("group"), code,
+                     r.get("cur_doc_id"), r.get("cur_period_end"), r.get("prev_doc_id"), r.get("prev_period_end"),
+                     resolve.get("as_of"), updated.isoformat()])
     order = {f["edinetCode"]: i for i, f in enumerate(filers)}
-    return sorted(rows, key=lambda x: (order.get(x[2], len(order)), x[2] or ""))
+    return sorted(rows, key=lambda x: (order.get(x[C_CODE], len(order)), x[C_CODE] or ""))
 
 
 def write_company_list(path: Path, rows: list[list]) -> Path:
@@ -183,7 +241,8 @@ def write_company_list(path: Path, rows: list[list]) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "社一覧"
-    _header(ws, COMPANY_HEADER, {"A": 10, "B": 22, "C": 12, "D": 12, "E": 12, "F": 12, "G": 12, "H": 12})
+    _header(ws, COMPANY_HEADER, {"A": 10, "B": 22, "C": 8, "D": 12, "E": 12, "F": 12, "G": 12, "H": 12, "I": 12,
+                                 "J": 12})
     for r in rows:
         ws.append(r)
     for c in ws["A"][1:]:
@@ -297,22 +356,22 @@ def weekly_md(updated: date, company: list[list], resolve: dict, compare: dict, 
               monitor_md: str, reconcile_md: str, monitor_run: str | None) -> str:
     by_code = {f.get("edinetCode"): f for f in compare["filers"]}
     rrow = {r.get("edinet_code") or r.get("entity_id"): r for r in resolve["rows"]}
-    out = [f"# 週次要約（更新日 {updated.isoformat()}）", "",
+    out = [f"# 週次要約（更新日 {updated.isoformat()}、基準日T {resolve.get('as_of')}）", "",
            f"`{RISK_DIFF}`・`{MONITOR}`・`{COMPANY_LIST}` をリンクで読めないときの代替。項目の本文は `{PER_COMPANY}/` の社別 md。",
            f"生成元: resolve run {resolve.get('run_id')}（{resolve.get('scope')}、FY {resolve.get('fy')}、"
            f"基準日 T={resolve.get('as_of')}）、compare run {compare.get('run_id')}、monitor run {monitor_run}。", "",
-           "## 1. 対象社一覧", "", "| " + " | ".join(COMPANY_HEADER[:7]) + " |", "|" + "---|" * 7]
-    out += ["| " + " | ".join(_cell(v) for v in row[:7]) + " |" for row in company]
+           "## 1. 対象社一覧", "", "| " + " | ".join(COMPANY_HEADER[:8]) + " |", "|" + "---|" * 8]
+    out += ["| " + " | ".join(_cell(v) for v in row[:8]) + " |" for row in company]
     out += ["", "## 2. 変化表", "",
             "文字数増減率 = (当期文字数 − 前期文字数) ÷ 前期文字数（「事業等のリスク」全体）。", "",
             "| 証券コード | 社名 | 新設 | 削除 | 変更あり | 軽微 | 変更なし | 要確認 | 前期文字数 | 当期文字数 | 文字数増減率 | 社別 md |",
             "|" + "---|" * 12]
     details: list[str] = []
     for row in company:
-        f = by_code.get(row[2])
+        f = by_code.get(row[C_CODE])
         if f is None:
             continue
-        md = md_names.get(row[2])
+        md = md_names.get(row[C_CODE])
         link = _cell(md and f"{PER_COMPANY}/{md}")
         if f["skip"]:
             out.append(f"| {_cell(row[0])} | {_cell(row[1])} |" + " - |" * 9 + f" {link} |")
@@ -328,7 +387,7 @@ def weekly_md(updated: date, company: list[list], resolve: dict, compare: dict, 
     out += ["## 3. 要確認リスト", "", "| 証券コード | 社名 | 理由 |", "|---|---|---|"]
     n = len(out)
     for row in company:
-        reasons = review_reasons(rrow.get(row[2], {}), by_code.get(row[2]))
+        reasons = review_reasons(rrow.get(row[C_CODE], {}), by_code.get(row[C_CODE]))
         if reasons:
             out.append(f"| {_cell(row[0])} | {_cell(row[1])} | {_cell('; '.join(reasons))} |")
     if len(out) == n:
@@ -373,8 +432,8 @@ def build(publish_dir: Path, out_root: Path, resolve_run: str, targets: Path, *,
     company = company_rows(resolve, filers, by_code, today)
     write_company_list(publish_dir / COMPANY_LIST, company)
     rrow = {r.get("edinet_code") or r.get("entity_id"): r for r in resolve["rows"]}
-    sec = {row[2]: row[0] for row in company}
-    name = {row[2]: row[1] for row in company}
+    sec = {row[C_CODE]: row[C_SEC] for row in company}
+    name = {row[C_CODE]: row[C_NAME] for row in company}
     md_names: dict[str, str] = {}
     for f in compare["filers"]:
         code = f.get("edinetCode")

@@ -41,8 +41,8 @@ def _db(path: Path) -> Path:
 
 def _targets(tmp: Path) -> Path:
     t = tmp / "targets.toml"
-    pp.write_targets(t, [{"label": "テスト自動車", "edinetCode": "E99999", "secCode": "7261"},
-                         {"label": "前期なし工業", "edinetCode": "E99998"}], [])
+    pp.write_targets(t, [{"label": "テスト自動車", "edinetCode": "E99999", "secCode": "7261", "group": "ピア"},
+                         {"label": "前期なし工業", "edinetCode": "E99998", "group": "依頼"}], [])
     return t
 
 
@@ -97,8 +97,8 @@ def test_merge_targets_dedupes_and_looks_up_sec_codes(tmp_path):
     b.write_text('[[filer]]\nsecCode = "7201"\n\n[[filer]]\nedinetCode = "E99999"\nlabel = "重複"\n', encoding="utf-8")
     conn = sqlite3.connect(_db(tmp_path / "db.sqlite"))
     filers, periods = pp.merge_targets([a, b], conn)
-    assert filers == [{"label": "テスト自動車", "edinetCode": "E99999", "secCode": "7261"},
-                      {"label": "日産自動車株式会社", "edinetCode": "E02142", "secCode": "7201"}]
+    assert filers == [{"label": "テスト自動車", "edinetCode": "E99999", "secCode": "7261", "group": "ピア"},
+                      {"label": "日産自動車株式会社", "edinetCode": "E02142", "secCode": "7201", "group": "依頼"}]
     out = pp.write_targets(tmp_path / "merged.toml", filers, periods)
     from edinet_risk.m0_multi import load_targets       # resolve / fetch read it this way
     f2, p2 = load_targets(out)
@@ -111,6 +111,11 @@ def test_merge_targets_dedupes_and_looks_up_sec_codes(tmp_path):
         pp.merge_targets([b], None)
     with pytest.raises(pp.PublishError, match="not found"):
         pp.merge_targets([tmp_path / "missing.toml"], None)
+    b.write_text('[[filer]]\nedinetCode = "E02142"\ngroup = "ピア"\n', encoding="utf-8")   # explicit 区分 wins
+    assert pp.merge_targets([a, b], None)[0][1]["group"] == "ピア"
+    b.write_text('[[filer]]\nedinetCode = "E02142"\ngroup = "その他"\n', encoding="utf-8")
+    with pytest.raises(pp.PublishError, match="group"):
+        pp.merge_targets([a, b], None)
 
 
 def test_merged_targets_without_periods_load(tmp_path):
@@ -122,6 +127,7 @@ def test_merged_targets_without_periods_load(tmp_path):
 def test_transport7_merges_with_sec_codes_from_db(tmp_path):
     filers, periods = pp.merge_targets([ROOT / "config" / "transport7.toml"], None)
     assert len(filers) == 7 and len(periods) == 2 and all("secCode" not in f for f in filers)
+    assert {f["group"] for f in filers} == {"ピア"}
 
 
 # ---------------------------------------------------------------- build
@@ -141,8 +147,11 @@ def test_build_writes_the_three_generated_files(tmp_path):
     ws = openpyxl.load_workbook(pub / "社一覧.xlsx").active
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
     assert rows[0] == list(pp.COMPANY_HEADER)
-    assert rows[1] == ["7261", "テスト自動車", "E99999", "C0000001", "2026-03-31", "P0000001", "2025-03-31", "2026-10-29"]
-    assert rows[2] == ["130A", "前期なし工業", "E99998", "C0000002", "2026-03-31", None, None, "2026-10-29"]
+    assert rows[0][:4] == ["証券コード", "社名", "区分", "EDINETコード"] and rows[0][-2:] == ["基準日T", "更新日"]
+    assert rows[1] == ["7261", "テスト自動車", "ピア", "E99999", "C0000001", "2026-03-31", "P0000001", "2025-03-31",
+                       "2026-09-30", "2026-10-29"]
+    assert rows[2] == ["130A", "前期なし工業", "依頼", "E99998", "C0000002", "2026-03-31", None, None,
+                       "2026-09-30", "2026-10-29"]
 
     assert sorted(p.name for p in (pub / "社別").glob("*.md")) == ["130A_前期なし工業.md", "7261_テスト自動車.md"]
     md = (pub / "社別" / "7261_テスト自動車.md").read_text(encoding="utf-8")
@@ -156,7 +165,8 @@ def test_build_writes_the_three_generated_files(tmp_path):
     assert "比較なし" in skip and "フラグ: irregular" in skip
 
     wk = (pub / "週次要約.md").read_text(encoding="utf-8")
-    assert wk.startswith("# 週次要約（更新日 2026-10-29）")
+    assert wk.startswith("# 週次要約（更新日 2026-10-29、基準日T 2026-09-30）")
+    assert "| 7261 | テスト自動車 | ピア | E99999 |" in wk
     cur, prev = len(CUR), len(PREV)
     assert f"| 7261 | テスト自動車 | 1 | 0 | 2 | 1 | 1 | 0 | {prev} | {cur} | {(cur - prev) / prev * 100:+.1f}% | " \
            "社別/7261_テスト自動車.md |" in wk
@@ -273,6 +283,56 @@ def test_publish_settings(tmp_path):
     assert load_settings(ROOT / "config" / "settings.example.toml", env={}).publish.out_dir == "out/publish"
 
 
+# ---------------------------------------------------------------- base date T / doclist range
+def _day(cache: Path, d: str, fetched: str) -> None:
+    (cache / "doclist").mkdir(parents=True, exist_ok=True)
+    (cache / "doclist" / f"{d}.json").write_text(json.dumps({"metadata": {"processDateTime": f"{fetched} 09:00"},
+                                                             "results": []}), encoding="utf-8")
+
+
+def test_doclist_range_catches_up_a_skipped_week(tmp_path):
+    cache = tmp_path / "cache"
+    for i in range(1, 30):                                       # 09-30..10-28 final (fetched the next day)
+        d = date.fromordinal(TODAY.toordinal() - i)
+        _day(cache, d.isoformat(), date.fromordinal(d.toordinal() + 1).isoformat())
+    assert pp.doclist_range(cache, TODAY, 8, 62) == (date(2026, 10, 22), TODAY, False)   # nothing missing: 8 days
+    for i in range(10, 22):                                      # last week's run skipped (10-10..10-21 missing)
+        (cache / "doclist" / f"2026-10-{i}.json").unlink()
+    _day(cache, "2026-10-10", "2026-10-10")                      # ... and 10-10 fetched on the day (not final)
+    assert pp.doclist_range(cache, TODAY, 8, 62) == (date(2026, 10, 10), TODAY, False)   # from the day after 10-09
+    assert pp.doclist_range(cache, TODAY, 8, 15) == (date(2026, 10, 15), TODAY, True)     # capped at max_days
+    assert pp.doclist_warnings(date(2026, 10, 15), True, 15) and not pp.doclist_warnings(TODAY, False, 15)
+    assert pp.doclist_range(tmp_path / "empty", TODAY, 8, 8) == (date(2026, 10, 22), TODAY, False)
+
+
+def test_as_of_is_today_unless_fixed():
+    assert pp.as_of_date("today", TODAY) == TODAY
+    assert pp.as_of_date("2026-09-30", TODAY) == date(2026, 9, 30)
+    assert pp.as_of_warnings(TODAY, date(2026, 9, 30), date(2026, 9, 30))           # past the submit window
+    assert not pp.as_of_warnings(date(2026, 9, 30), date(2026, 9, 30), date(2026, 9, 30))
+    w = pp.as_of_warnings(date(2027, 3, 1), date(2026, 9, 30), date(2027, 6, 30))
+    assert len(w) == 1 and "run.as_of" in w[0]
+
+
+def test_cli_config_gives_as_of_and_doclist_range(tmp_path, capsys):
+    s = tmp_path / "settings.toml"
+    cache = tmp_path / "cache"
+    s.write_text(f'[paths]\ncache_dir = "{cache.as_posix()}"\n', encoding="utf-8")
+    assert main(["publish", "config", "--config", str(s), "--today", "2026-10-29"]) == 0
+    cfg = json.loads(capsys.readouterr().out)
+    assert (cfg["as_of"], cfg["run_as_of"], cfg["today"]) == ("2026-10-29", "2026-09-30", "2026-10-29")
+    assert (cfg["doclist_from"], cfg["doclist_to"]) == ("2026-08-29", "2026-10-29")      # empty cache: max 62 days
+    assert len(cfg["warnings"]) == 2                    # past window.current.submit_to + doclist capped
+    s.write_text(f'[paths]\ncache_dir = "{cache.as_posix()}"\n[publish]\nas_of = "2026-09-30"\n'
+                 'doclist_max_days = 8\n', encoding="utf-8")
+    assert main(["publish", "config", "--config", str(s), "--today", "2026-10-29"]) == 0
+    cfg = json.loads(capsys.readouterr().out)
+    assert (cfg["as_of"], cfg["doclist_from"], cfg["warnings"]) == ("2026-09-30", "2026-10-22", [])
+    for bad in ('as_of = "yesterday"', "doclist_max_days = 3"):
+        s.write_text(f"[publish]\n{bad}\n", encoding="utf-8")
+        assert main(["publish", "config", "--config", str(s)]) == 2
+
+
 # ---------------------------------------------------------------- scripts/publish_peer.ps1 (static)
 def test_ps1_is_powershell51_safe():
     raw = PS1.read_bytes()
@@ -340,6 +400,40 @@ def test_ps1_reads_existing_json_keys(tmp_path, capsys):
 def _ps1_code() -> str:
     text = PS1.read_text(encoding="utf-8-sig")
     return "\n".join(ln.split("#")[0] for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def _joined(code: str) -> list[str]:
+    lines, buf = [], ""
+    for ln in code.splitlines():
+        buf += ln.strip() + " "
+        if not ln.rstrip().endswith(","):
+            lines.append(buf.strip())
+            buf = ""
+    return lines
+
+
+def test_ps1_weekly_resolve_uses_as_of_and_doclist_range():
+    """Both resolves get --as-of from publish config (today by default); doclist uses the computed range."""
+    code = _ps1_code()
+    assert re.search(r"\$AsOf\s*=\s*\$cfg\.as_of", code)
+    resolves = [ln for ln in _joined(code) if re.match(r'Invoke-Cli "resolve', ln)]
+    assert len(resolves) == 2 and all('"--as-of", $AsOf' in ln for ln in resolves), resolves
+    doclist = next(ln for ln in _joined(code) if ln.startswith('Invoke-Cli "doclist"'))
+    assert '"--from", $cfg.doclist_from' in doclist and '"--to", $cfg.doclist_to' in doclist
+    assert "Get-Date).AddDays" not in code
+    assert re.search(r"foreach \(\$w in @\(\$cfg\.warnings\)\).*?\$Script:Warnings\.Add", code, re.S)
+
+
+def test_ps1_gate_missing_settings_or_dest_fails():
+    """Not -DryRun / -NoSync: no settings file or empty dest_dir throws (exit 1) before any CLI step runs."""
+    code = _ps1_code()
+    m = re.search(r"if \(-not \$DryRun -and -not \$NoSync\) \{(.*?)\n    \}\n", code, re.S)
+    assert m, "settings / dest gate not found"
+    gate = m.group(1)
+    assert re.search(r"if \(-not \$cfg\.settings\) \{\s*throw", gate)
+    assert re.search(r"if \(-not \$Dest\) \{\s*throw", gate)
+    assert code.index(m.group(0)) < code.index('Invoke-Cli "targets"')
+    assert code.index("$Dest = $cfg.dest_dir") < code.index(m.group(0))
 
 
 def test_ps1_gate_doclist_failure_blocks_publish():
