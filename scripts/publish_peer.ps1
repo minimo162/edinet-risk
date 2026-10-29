@@ -16,7 +16,13 @@
     社一覧.xlsx の「基準日T」列と週次要約.md の見出しに出る。
   - 書類一覧の範囲: publish config の doclist_from..doclist_to（まだ確定していない最も古い日から当日まで。
     休んだ週の分も取り直す。上限 publish.doclist_max_days 日）。
-  - 同期フォルダへは上書きコピーのみ（削除→新規作成にしない。リンクが変わるため）。
+  - 同期フォルダへは上書きコピーのみ（削除→新規作成にしない。リンクが変わるため）。社一覧.xlsx を最後にコピーし
+    「完了の印」にする（途中で失敗したら社一覧.xlsx は前回のまま）。ロック中のファイルは短い間隔で数回やり直す。
+    例外: 同期フォルダの 社別\*.md のうち今回の対象にないもの（対象外・label 変更前）は消す（Copilot が読まないように）。
+  - 終了コード: 0 = 成功、1 = 失敗（同期していない、またはコピー途中で失敗）、3 = -FailOnThreshold 指定時に
+    monitor の閾値超過があった（公開はした）。
+  - compare / report の終了コード 2 は「一部の社が比較できない／照合が全文一致しない」なら警告で続行、
+    出力の集計行がない（入力がない）なら失敗にする。
   - 手順の詳細は docs/admin-runbook.md。PowerShell 5.1 で動く書き方にしている（UTF-8 BOM 付きで保存すること）。
 
 .PARAMETER DryRun
@@ -31,6 +37,8 @@
   書類一覧の同期を省く（キャッシュと DB にある書類だけで回す）。
 .PARAMETER NoSync
   publish/ を作って点検するところまで。同期フォルダへはコピーしない（settings・dest_dir がなくてもよい）。
+.PARAMETER FailOnThreshold
+  monitor の閾値超過（breached が1件以上）があれば、公開したうえで終了コード 3 にする（既定オフ = 警告のみで 0）。
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1 -DryRun
@@ -42,7 +50,8 @@ param(
     [string]$Dest = "",
     [string]$Python = "",
     [switch]$SkipDoclist,
-    [switch]$NoSync
+    [switch]$NoSync,
+    [switch]$FailOnThreshold
 )
 
 Set-StrictMode -Version 2.0
@@ -63,15 +72,32 @@ if ($Config) { $CfgArgs = @("--config", $Config) }
 
 $Stamp = Get-Date -Format "yyyyMMdd'T'HHmmss"
 $Script:Log = $null
+$Script:Pending = New-Object System.Collections.Generic.List[string]   # ログファイルが決まる前の行（publish config の stderr 等）
 $Script:Warnings = New-Object System.Collections.Generic.List[string]
 $Script:CliOut = New-Object System.Collections.Generic.List[string]   # 直前の Invoke-Cli の出力行
 $Script:LastRc = 0
 # fetch の集計行（__main__._fetch の print と一致させる。tests/test_peer_publish.py で照合）
 $FetchSummary = 'fetched=(\d+) adopted_from_cache=(\d+) failed=(\d+)'
+# compare / report / monitor の集計行（終了コード 2 の「一部の社だけ」と「入力なし」を分ける。同上で照合）
+$CompareSummary = 'compare\.json in '
+$ReportSummary = 'run_id=\S+ xlsx=.* html=\d+ pages'   # ASCII 部分で照合（コンソールの文字コードに依らない）
+$MonitorSummary = 'breached=(\d+)'
+$Script:Breached = 0
+$CompanyList = "社一覧.xlsx"   # 同期フォルダへ最後にコピーする（完了の印）
+$CopyRetries = 5
+$CopyRetrySec = 10
 
 function Write-Log([string]$Text) {
     Write-Host $Text
-    if ($Script:Log) { Add-Content -LiteralPath $Script:Log -Value $Text -Encoding UTF8 }
+    if ($Script:Log) { Add-Content -LiteralPath $Script:Log -Value $Text -Encoding UTF8 } else { $Script:Pending.Add($Text) }
+}
+
+# ログファイルを決め、それまでの行を書き出す
+function Open-Log([string]$Dir) {
+    New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+    $Script:Log = Join-Path $Dir ("publish_peer_{0}.log" -f $Stamp)
+    if ($Script:Pending.Count -gt 0) { Add-Content -LiteralPath $Script:Log -Value $Script:Pending -Encoding UTF8 }
+    $Script:Pending.Clear()
 }
 
 function Format-Args([string[]]$CliArgs) {
@@ -115,15 +141,42 @@ function Assert-FetchGate {
     }
 }
 
+# compare / report の終了コード 2: 集計行があれば「一部の社が比較できない／照合が全文一致しない」（警告で続行）、
+# なければ入力がない（resolve / compare の出力がない）ので止める。
+function Assert-Partial([string]$Step, [string]$Pattern) {
+    if ($DryRun -or $Script:LastRc -eq 0) { return }
+    $hit = $false
+    foreach ($ln in $Script:CliOut) { if ($ln -match $Pattern) { $hit = $true } }
+    if (-not $hit) {
+        throw ("{0}: 終了コード 2 で集計行がありません（入力なし）。同期フォルダは更新しません（前回分が残ります）。" -f $Step)
+    }
+    Write-Log ("    -> {0}: 終了コード 2 = 一部の社が比較できない／照合が全文一致しない（入力はある。続行）" -f $Step)
+}
+
+# monitor の閾値超過の件数（monitor は --fail-on-threshold なしで呼ぶ。終了コード 2 は入力エラーにも使われるため）
+function Read-MonitorBreach {
+    if ($DryRun) { return }
+    foreach ($ln in $Script:CliOut) { if ($ln -match $MonitorSummary) { $Script:Breached = [int]$Matches[1] } }
+    if ($Script:Breached -gt 0) {
+        $Script:Warnings.Add("monitor breached=$($Script:Breached)")
+        Write-Log ("    -> 警告: monitor の閾値超過 {0} 件（monitor.xlsx 監視_概要）" -f $Script:Breached)
+    }
+}
+
 # JSON を出す helper（publish config / publish build）を実行して結果を返す。
 function Invoke-Json([string]$Step, [string[]]$CliArgs) {
     Write-Log ("[{0}] {1} -m edinet_risk {2}" -f $Step, $Python, (Format-Args $CliArgs))
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    $out = & $Python -m edinet_risk --log-level WARNING @CliArgs
+    # 標準エラー（失敗理由の logging）は ErrorRecord として分けて受け取り、ログに残す。標準出力だけを JSON にする
+    $all = @(& $Python -m edinet_risk --log-level WARNING @CliArgs 2>&1)
     $rc = $LASTEXITCODE
     $ErrorActionPreference = $prev
-    if ($rc -ne 0) { throw ("{0} が終了コード {1} で失敗しました。" -f $Step, $rc) }
+    $out = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    foreach ($e in @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] })) {
+        Write-Log ("    stderr: " + $e.ToString())
+    }
+    if ($rc -ne 0) { throw ("{0} が終了コード {1} で失敗しました（理由は上の stderr）。" -f $Step, $rc) }
     return (($out | Out-String) | ConvertFrom-Json)
 }
 
@@ -133,7 +186,31 @@ function Copy-Over([string]$From, [string]$To) {
     if ($DryRun) { return }
     $dir = Split-Path -Parent $To
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    Copy-Item -LiteralPath $From -Destination $To -Force
+    for ($i = 1; ; $i++) {   # Excel で開かれている等のロックは短い間隔でやり直す
+        try { Copy-Item -LiteralPath $From -Destination $To -Force; return }
+        catch {
+            if ($i -ge $CopyRetries) { throw ("コピーできません: {0}（{1}）" -f $To, $_.Exception.Message) }
+            Write-Log ("    -> ロック中？ {0} 秒後にやり直します（{1}/{2}）: {3}" -f $CopyRetrySec, $i, $CopyRetries, $_.Exception.Message)
+            Start-Sleep -Seconds $CopyRetrySec
+        }
+    }
+}
+
+# 同期フォルダの 社別\*.md のうち、今回 publish\社別 にないもの（対象外・label 変更前）を消す。ほかのファイルは消さない。
+function Remove-StaleMd([string]$WorkDir, [string]$DestDir) {
+    $dd = Join-Path $DestDir "社別"
+    if ($DryRun -or -not (Test-Path -LiteralPath $dd)) { return }
+    $keep = @(Get-ChildItem -LiteralPath (Join-Path $WorkDir "社別") -Filter *.md -File | ForEach-Object { $_.Name })
+    Get-ChildItem -LiteralPath $dd -Filter *.md -File | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
+        Write-Log ("[remove] {0}（今回の対象にない社別 md）" -f $_.FullName)
+        Remove-Item -LiteralPath $_.FullName -Force
+    }
+}
+
+# パスを末尾 \ 付きの絶対パスにする（同じ／配下の判定用。Windows なので大小文字を区別しない）
+function Get-FullDir([string]$P) { [IO.Path]::GetFullPath($P).TrimEnd('\') + '\' }
+function Test-SameOrUnder([string]$Child, [string]$Parent) {
+    (Get-FullDir $Child).StartsWith((Get-FullDir $Parent), [StringComparison]::OrdinalIgnoreCase)
 }
 
 $exit = 0
@@ -147,10 +224,7 @@ try {
     $Targets = Join-Path $Out "targets.toml"
     $R1 = "resolve-$Stamp-pre"   # fetch の対象を決める resolve
     $R2 = "resolve-$Stamp-pub"   # 本文取得後の resolve（公開に使う）
-    if (-not $DryRun) {
-        New-Item -ItemType Directory -Path (Join-Path $Out "logs") -Force | Out-Null
-        $Script:Log = Join-Path $Out ("logs\publish_peer_{0}.log" -f $Stamp)
-    }
+    if (-not $DryRun) { Open-Log (Join-Path $Out "logs") }
     Write-Log ("publish_peer {0}{1}: settings={2} out={3} publish={4} dest={5}" -f $Stamp,
         $(if ($DryRun) { " (DryRun)" } else { "" }), $(if ($cfg.settings) { $cfg.settings } else { "(既定値)" }),
         $Out, $Work, $(if ($Dest) { $Dest } else { "(未設定: コピーしない)" }))
@@ -172,8 +246,8 @@ try {
     if (-not $DryRun -and ($cfg.api_key_source -ne "env" -and $cfg.api_key_source -ne "file")) {
         throw "API キーがありません。EDINET_API_KEY 環境変数か settings の paths.api_key_file を設定してください（docs/admin-runbook.md）。"
     }
-    if ($Dest -and ([IO.Path]::GetFullPath($Dest).TrimEnd('\') -eq [IO.Path]::GetFullPath($Work).TrimEnd('\'))) {
-        throw "publish.dest_dir と publish.work_dir が同じです。別のフォルダにしてください。"
+    if ($Dest -and ((Test-SameOrUnder $Dest $Work) -or (Test-SameOrUnder $Work $Dest))) {
+        throw "publish.dest_dir と publish.work_dir が同じか、一方が他方の中にあります（自己上書きになる）。別のフォルダにしてください。"
     }
 
     # ---- 1. 対象社（transport7 + 依頼社リスト）を1つの targets にまとめる
@@ -199,11 +273,14 @@ try {
     $resolveJson = Join-Path $Out ("resolve_{0}\resolve_transport7.json" -f $R2)
     $m1 = Join-Path $Out "m1"
     Invoke-Cli "compare" @("compare", "--resolve", $resolveJson, "--m0", (Join-Path $Out "m0_none"), "--cache", $Cache,
-        "--out", $m1, "--run-id", $R2) -WarnCodes @(2)   # 2 = 前期なし等で比較できない社がある
+        "--out", $m1, "--run-id", $R2) -WarnCodes @(2)   # 2 = 前期なし等で比較できない社がある、または入力なし
+    Assert-Partial "compare" $CompareSummary
     Invoke-Cli "report" @("report", "--run", (Join-Path $m1 "run_$R2")) -WarnCodes @(2)
+    Assert-Partial "report" $ReportSummary
 
-    # ---- 5. monitor
+    # ---- 5. monitor（--fail-on-threshold は付けない。超過は集計行から読む）
     Invoke-Cli "monitor" (@("monitor", "--run", $R2, "--out", $Out) + $CfgArgs)
+    Read-MonitorBreach
 
     # ---- 6. 社一覧.xlsx・社別 md・週次要約.md を生成し、risk_diff / monitor を正規名でコピー
     $buildArgs = @("publish", "build", "--out-root", $Out, "--resolve-run", $R2, "--targets", $Targets,
@@ -228,19 +305,39 @@ try {
         Write-Log "同期フォルダへのコピーは省略（-NoSync または publish.dest_dir 未設定）。"
     } elseif ($DryRun) {
         foreach ($n in @("risk_diff.xlsx", "monitor.xlsx")) { Copy-Over (Join-Path $Work $n) (Join-Path $Dest $n) }
-        Write-Log ("[copy] {0}\(社一覧.xlsx・週次要約.md・社別\*.md・templates\*.xlsx) -> {1}\ （同じ相対パスに上書き）" -f $Work, $Dest)
+        Write-Log ("[copy] {0}\(週次要約.md・社別\*.md・templates\*.xlsx) -> {1}\ （同じ相対パスに上書き）" -f $Work, $Dest)
+        Write-Log ("[remove] {0}\社別\*.md のうち今回の対象にないもの" -f $Dest)
+        Copy-Over (Join-Path $Work $CompanyList) (Join-Path $Dest $CompanyList)
     } else {
         if (-not (Test-Path -LiteralPath $Dest)) { throw "同期フォルダがありません: $Dest" }
         $base = (Resolve-Path -LiteralPath $Work).Path.TrimEnd('\')
-        Get-ChildItem -LiteralPath $Work -Recurse -File | ForEach-Object {
-            Copy-Over $_.FullName (Join-Path $Dest $_.FullName.Substring($base.Length + 1))
+        $files = @(Get-ChildItem -LiteralPath $Work -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length + 1) })
+        $rest = @($files | Where-Object { $_ -ne $CompanyList })
+        $done = New-Object System.Collections.Generic.List[string]
+        try {
+            foreach ($rel in $rest) { Copy-Over (Join-Path $Work $rel) (Join-Path $Dest $rel); $done.Add($rel) }
+            Remove-StaleMd $Work $Dest
+            Copy-Over (Join-Path $Work $CompanyList) (Join-Path $Dest $CompanyList)   # 最後 = 完了の印
+            $done.Add($CompanyList)
+        } finally {
+            Write-Log ("コピー済み {0}/{1} 件: {2}" -f $done.Count, ($rest.Count + 1), ($done -join ", "))
+            if (-not $done.Contains($CompanyList)) {
+                Write-Log "    -> 同期フォルダは新旧が混在しています（社一覧.xlsx は前回のまま）。ロックを外して再実行してください。"
+            }
         }
     }
 
     if ($Script:Warnings.Count -gt 0) { Write-Log ("完了（警告 {0} 件: {1}）。monitor.xlsx を確認してください。" -f $Script:Warnings.Count, ($Script:Warnings -join "; ")) }
     else { Write-Log "完了。" }
+    if ($FailOnThreshold -and $Script:Breached -gt 0) {
+        Write-Log ("-FailOnThreshold: monitor の閾値超過 {0} 件のため終了コード 3（公開は済み）。" -f $Script:Breached)
+        $exit = 3
+    }
 } catch {
     Write-Log ("失敗: {0}" -f $_.Exception.Message)
     $exit = 1
+    if (-not $DryRun -and -not $Script:Log) {   # publish config で失敗: 既定の out\publish\logs に残す
+        try { Open-Log (Join-Path $Root "out\publish\logs") } catch { }
+    }
 }
 exit $exit

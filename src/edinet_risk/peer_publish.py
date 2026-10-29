@@ -458,12 +458,13 @@ def build(publish_dir: Path, out_root: Path, resolve_run: str, targets: Path, *,
 
 
 def _mdate(p: Path) -> date:
-    return datetime.fromtimestamp(p.stat().st_mtime).date()
+    """File date in JST (same basis as ``build``'s today_jst(), so a run across midnight is judged consistently)."""
+    return datetime.fromtimestamp(p.stat().st_mtime, JST).date()
 
 
 def check(publish_dir: Path, today: date | None = None) -> list[str]:
     """Problems that block the sync (spec §2-5); [] = all five present and today's 社一覧 / monitor."""
-    today = today or date.today()           # file times are local; the admin PC runs on JST
+    today = today or today_jst()            # JST, like build (and _mdate)
     d = Path(publish_dir)
     bad = [f"missing: {n}" for n in (RISK_DIFF, MONITOR, COMPANY_LIST, WEEKLY) if not (d / n).is_file()]
     if not any((d / PER_COMPANY).glob("*.md")):

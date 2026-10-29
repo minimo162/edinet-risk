@@ -56,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1 -Dr
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1           # 本実行
 ```
 
-オプション: `-Config <toml>`（既定 `config\settings.toml`）、`-Dest <フォルダ>`（`publish.dest_dir` の上書き）、`-Python <python.exe>`（既定 `.venv\Scripts\python.exe`）、`-SkipDoclist`（書類一覧の同期を省く）、`-NoSync`（`publish\` の作成と点検まで。同期フォルダへコピーしない。`dest_dir` が空でもよい）。`-DryRun`・`-NoSync` なしで `settings.toml` がない、または `dest_dir`（`-Dest`）が空なら終了コード 1。
+オプション: `-Config <toml>`（既定 `config\settings.toml`）、`-Dest <フォルダ>`（`publish.dest_dir` の上書き）、`-Python <python.exe>`（既定 `.venv\Scripts\python.exe`）、`-SkipDoclist`（書類一覧の同期を省く）、`-NoSync`（`publish\` の作成と点検まで。同期フォルダへコピーしない。`dest_dir` が空でもよい）、`-FailOnThreshold`（monitor の閾値超過があれば、公開したうえで終了コード 3。既定オフ）。`dest_dir` を `work_dir`（`publish\`）と同じ・その中・その親にすると終了コード 1。`-DryRun`・`-NoSync` なしで `settings.toml` がない、または `dest_dir`（`-Dest`）が空なら終了コード 1。
 
 `publish_peer.ps1` が行うこと（既存 CLI をこの順に実行）:
 
@@ -66,7 +66,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\publish_peer.ps1    
 4. `compare`（本文は `cache\docs\` の type=1 ZIP から読む）→ `report`（`risk_diff_transport7.xlsx`）→ `monitor`
 5. `publish build`: `社一覧.xlsx`・`社別\<証券コード>_<社名>.md`・`週次要約.md` を `publish\` に生成し、`docs\templates\*.xlsx` を `publish\templates\` にコピー。`risk_diff_transport7.xlsx` → `risk_diff.xlsx`、`monitor_<run-id>\monitor.xlsx` → `monitor.xlsx` にリネームしてコピー
 6. `publish check`: 5種がそろい、`社一覧.xlsx` と `monitor.xlsx` が当日付か。だめなら **同期しない**（前回分が残る）
-7. 成功時のみ `dest_dir` へ同じ相対パスで **上書きコピー**（削除しない。削除→新規作成だとリンクが変わる）
+7. 成功時のみ `dest_dir` へ同じ相対パスで **上書きコピー**（削除→新規作成だとリンクが変わる）。`社一覧.xlsx` を **最後** にコピーする（完了の印）。Excel で開かれているなどロック中のファイルは 10 秒おきに最大5回やり直す。同期フォルダの `社別\*.md` のうち今回の対象にないもの（対象外にした社・`label` を変えた社の古い名前）だけは消す
 
 ## 5. タスクスケジューラ登録
 
@@ -101,13 +101,22 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 
 ## 6. 結果の確認（毎週）
 
-- 終了コード 0 = 成功（タスクスケジューラの「前回の実行結果」が 0x0）、1 = 失敗（同期していない）。
+- 終了コード 0 = 成功（タスクスケジューラの「前回の実行結果」が 0x0）、1 = 失敗（同期していない。コピー途中の失敗なら一部だけ更新され、`社一覧.xlsx` は前回のまま）、3 = `-FailOnThreshold` 指定時の閾値超過（公開は済み）。
 - ログ: `out\publish\logs\publish_peer_<日時>.log`（キーは出ない）。
-- 「完了（警告 n 件…）」は続行できた警告（終了コード 2: fetch の一部失敗（新規取得が1件以上ある場合）、compare の前期なしで比較できない社、report の照合で全文一致しない社）。`monitor.xlsx` の要確認を見る。
+- 「完了（警告 n 件…）」は続行できた警告（終了コード 2: fetch の一部失敗（新規取得が1件以上ある場合）、compare の前期なしで比較できない社、report の照合で全文一致しない社。monitor の閾値超過 `monitor breached=n`）。`monitor.xlsx` の要確認を見る。
+- CLI の **終了コード 2 の意味**: `compare`・`report` は「一部の社だけ比較できない／照合が全文一致しない」と「入力がない」のどちらも 2。ps1 は集計行の有無で分け、ログに「終了コード 2 = 一部の社が比較できない…（続行）」か「集計行がありません（入力なし）」（失敗、終了コード 1）と出す。
 - doclist sync の失敗（終了コード 2 を含む）と、fetch の「新規取得 0 件でエラーあり」は失敗（終了コード 1、同期しない）。古いデータを当日分として公開しないため。
 - 公開フォルダの `社一覧.xlsx`・`monitor.xlsx` の更新日が当日、`社一覧.xlsx` の「基準日T」が実行日になっていること。
 - 「警告: 基準日T … が当期の提出期間の終わり … を過ぎています」が出たら、年度の切り替え（`settings.toml` の `[run]` `fy`・`[window]`）を検討する。続行はする。
 - 「settings が見つかりません」「publish.dest_dir が空です」は設定の誤り（終了コード 1、何も実行していない）。§1 の 2. を見直す。
+
+### 失敗に気づく（通知システムは作っていない）
+
+- **タスクの終了コード**: タスクスケジューラの「前回の実行結果」が 0x0 以外（0x1 = 失敗、0x3 = `-FailOnThreshold` の閾値超過）なら見る。週1回、実行日に確認する。
+- **ログ**: `out\publish\logs\` の最新ログの最後の行が「完了。」か「完了（警告…）」か「失敗: …」か。`publish config`／`publish build` の失敗理由は `stderr:` の行に出る。
+- **更新日が古い**: 公開フォルダの `社一覧.xlsx` の更新日が1週間より前なら、タスクが止まっているか失敗が続いている（PC 停止・サインイン切れを含む）。
+- **コピー途中の失敗**: ログに「コピー済み n/m 件」「新旧が混在しています」が出たら、ロックしている人に閉じてもらい再実行する。
+- （任意）Teams／メールに知らせたいときは、タスクスケジューラのイベント（タスクの失敗）や Power Automate で共有チャネル宛てに通知する（個人宛てにしない）。本リポには通知の仕組みは入れていない。
 
 ## 7. 失敗したとき
 
@@ -118,13 +127,16 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 | 「doclist が終了コード 2 で失敗」 | ログの `failed <日付>` / `not fetched=` | 一時障害なら時間をおいて再実行（取得済みの日はキャッシュから読むので速い） |
 | 「fetch: 新規取得 0 件でエラーがあります」 | ログの `failed` / `retry` の書類 | 再実行。続くなら EDINET 側の障害か書類の取下げを確認 |
 | `publish check` NOT OK | ログの `missing:` / `not updated today:` | 欠けた CLI 出力を確認。同期は走っていない（前回分が残る） |
+| 「compare: 終了コード 2 で集計行がありません」 | resolve の出力（`resolve_<run-id>\resolve_transport7.json`） | resolve が対象社を出していない。ログの resolve の行を確認 |
+| 「コピーできません」「新旧が混在しています」 | ログの「コピー済み」一覧 | 同期フォルダのファイルを開いている人に閉じてもらい再実行（`社一覧.xlsx` が前回のままなら未完了） |
+| 「dest_dir と work_dir が同じか、一方が他方の中」 | `[publish]` の `dest_dir`・`work_dir` | 別のフォルダにする |
 | SharePoint に古いまま | `dest_dir`・OneDrive の同期状態 | パス誤り or 同期停止（サインイン切れ） |
 | 利用者「ファイル開けない」 | 閲覧権限・リンク切れ | 権限付与、ピン留め更新。正規名を変えていないか |
 
 ## 8. 制限（MVP）
 
 - 年度は `settings.toml` の `[run]`／`[window.*]`（既定 FY 2026-03、3月決算）。年度が替わったら更新する。
-- 対象から外した社の `社別\*.md` は同期フォルダに残る（上書きのみで削除しないため）。不要なら手で消す。
+- 対象から外した社・`label` を変えた社の古い `社別\*.md` は、同期フォルダから自動で消す（`社別\*.md` だけ。ほかのファイルは消さない）。
 - `publish\` の正規名ファイルは毎回作り直す（それ以外のファイルには触れない）。
 
 ## 9. 離任前チェックリスト

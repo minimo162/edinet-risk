@@ -1,6 +1,6 @@
 # 誰でも簡単に使う方法（edinet-risk × Microsoft 365 Copilot）
 
-前提: M365 Copilot のコード実行は Microsoft 側の隔離環境で行われ、社内 PC の CLI は動かず、そこから EDINET へも通信できない。全社抽出は CLI バッチ専用。対象は利用者が指定する社（最大10社）、指定がなければマツダ同業ピア（`config/transport7.toml`）。API キーはプロンプトやチャットに一切入れない。
+前提: M365 Copilot のコード実行は Microsoft 側の隔離環境で行われ、社内 PC の CLI は動かず、そこから EDINET へも通信できない。全社抽出は CLI バッチ専用。対象は利用者が指定する社（最大10社）、指定がなければマツダ同業ピア（`config/transport7.toml`。公開対象はピア＋依頼社）。API キーはプロンプトやチャットに一切入れない。
 
 ## 0. 環境前提（社内）
 - **社内 PC は Windows のみ**（利用者も管理者も）。Windows 以外のサーバや仮想環境を必須にしない。
@@ -22,15 +22,15 @@
 
 初めての利用者の手順:
 1. 共有 Teams チャネルのピン留め投稿「EDINET リスク分析プロンプト」を全文コピーする（管理者が実リンク入りで投稿済み）。
-2. M365 Copilot Chat を開き、貼り付けて送信する。社を指定するときだけ1行目の `対象:` に証券コードか社名を書く（空欄ならマツダ同業7社）。
+2. M365 Copilot Chat を開き、貼り付けて送信する。社を指定するときだけ1行目の `対象:` に証券コードか社名を書く（空欄なら `社一覧.xlsx` の区分=ピアの社＝マツダ同業ピア。依頼で追加した社は指定したときだけ）。
 3. 6シートの Excel（対象確認・変化表・差分詳細・分析・マツダ比較・要確認）が1回で返る。分析したい社が公開対象に入っていなければ、`対象確認` シートに「対象外」と出る。
 4. 対象外の社が必要なら、共有 Teams チャネルに証券コードを書いて依頼する。次回の週次バッチで反映される。
 
 プロンプト本文と、回答がおかしいときの対処は `docs/copilot-runbook.md`。
 
 ## 3. 管理者（一度だけ／定期） vs 利用者（毎回）
-- 管理者（一度だけ）: **社内 Windows** に edinet-risk を構築する（Python は管理用マシンのみ）。キーは Windows の保護された場所（例: マシンローカルの ACL 付きファイルを `paths.api_key_file` で指す、またはシステム環境変数をタスクスケジューラ専用に設定）。SharePoint 公開フォルダ（利用者グループに閲覧権限のみ）・リンク入り統合プロンプトの Teams ピン留め・依頼窓口を用意する。利用者 PC には CLI を入れない。
-- 管理者（定期）: 既定ピア＋依頼社について fetch → extract → resolve → monitor を実行し、結果を SharePoint へ置く。Windows のタスクスケジューラ＋ OneDrive/SharePoint 同期が望ましい。
+- 管理者（一度だけ）: **社内 Windows** に edinet-risk を構築する（Python は管理用マシンのみ）。キーは Windows の保護された場所（例: ACL 付きファイルを `paths.api_key_file` で指す、またはタスクを実行するユーザーの **ユーザー環境変数** `EDINET_API_KEY`。`docs/admin-runbook.md` §2）。SharePoint 公開フォルダ（利用者グループに閲覧権限のみ）・リンク入り統合プロンプトの Teams ピン留め・依頼窓口を用意する。利用者 PC には CLI を入れない。
+- 管理者（定期）: 既定ピア＋依頼社について doclist → resolve → fetch → extract → resolve → compare → report → monitor を実行し（`scripts/publish_peer.ps1`）、結果を SharePoint へ置く。Windows のタスクスケジューラ＋ OneDrive/SharePoint 同期が望ましい。
 - 利用者（毎回）: M365 Copilot Chat に統合プロンプト1本を貼るだけ。ファイル指定も SharePoint 閲覧も不要（公開名は `docs/publish_peer.spec.md` の正規名で固定、リンクはプロンプトに入っている）。
 
 ## 4. キーの扱い
@@ -39,7 +39,7 @@
 - 案5（Studio の API 接続）を採る場合は、コネクタの API key 欄か Key Vault を使う。編集者が値を見られる点に注意する。
 
 ## 5. 次に作る最小 MVP
-1. `scripts/publish_peer.ps1`: transport7（＋依頼社リスト）について取得から monitor まで実行し、CLI 出力（例: `risk_diff_transport7.xlsx`、`monitor_<run-id>/monitor.xlsx`）を `publish/` に正規名（`risk_diff.xlsx`・`monitor.xlsx`・`社一覧.xlsx`・社別 md・`週次要約.md`）でリネームして置く（Windows）。正規名とリネーム表は `docs/publish_peer.spec.md`。
+1. `scripts/publish_peer.ps1`: transport7（＋依頼社リスト）について doclist → resolve → fetch → extract → resolve → compare → report → monitor を実行し、CLI 出力（例: `risk_diff_transport7.xlsx`、`monitor_<run-id>/monitor.xlsx`）を `publish/` に正規名（`risk_diff.xlsx`・`monitor.xlsx`・`社一覧.xlsx`・社別 md・`週次要約.md`）でリネームして置く（Windows）。正規名とリネーム表は `docs/publish_peer.spec.md`。
 2. `publish/` を SharePoint の同期フォルダへコピーする（タスクスケジューラで毎週）。
 3. runbook の統合プロンプト1本に公開ファイルの実リンクを入れ、共有 Teams チャネルにピン留めする（SharePoint には置かない。利用者に開かせないため）。
 4. マツダピアで、非エンジニア1名にパイロット利用してもらい、つまずいた点を runbook に反映する。特に「リンク参照だけで Copilot が xlsx を読めるか」を最初に確認する（`docs/copilot-runbook.md`「パイロット第1確認」。だめなら `週次要約.md`＋社別 md で回答させる）。
@@ -54,14 +54,14 @@
 - キーを利用者に配らないので、引き継ぎ時のキー配布事故が起きにくい。
 
 ### いまの案の弱み（引き継ぎで壊れやすい点）
-- キーが「前任者の個人フォルダや個人環境変数 にだけあると、アカウント削除・PC返却と同時に取得が止まる。
+- キーが「前任者の個人フォルダや個人環境変数」にだけあると、アカウント削除・PC返却と同時に取得が止まる。
 - タスクスケジューラ / OneDrive 同期 / SharePoint の場所がドキュメント化されていないと、後任が「何が自動で動いているか」分からない。
 - 依頼窓口（Teams チャネルまたはフォーム）の通知先が個人メール／個人 Teams だと、後任に届かない。
 - `publish/` の作り方とアップロード手順が口頭だけだと属人化する。
 
 ### 引き継ぎに優しい修正（推奨案に含める）
 1. **運用 Runbook（管理者用1枚）** を SharePoint の「管理者のみ」フォルダに置く: リポ URL、動作マシン、タスクスケジューラの設定内容、公開先パス、閲覧権限を付けた利用者グループ、Teams ピン留め投稿の場所、依頼窓口、障害時の見方。
-2. **キーは個人の OneDrive／チャットに置かない**: 管理用 Windows のローカル（権限を絞ったファイル＋`paths.api_key_file`）か、タスク用のシステム環境変数。引き継ぎはキー再発行＋配置の差し替え。
+2. **キーは個人の OneDrive／チャットに置かない**: 管理用 Windows のローカル（権限を絞ったファイル＋`paths.api_key_file`）か、タスクを実行する管理用ユーザーのユーザー環境変数。引き継ぎはキー再発行＋配置の差し替え。
 3. **秘密は Git に入れない**: キーパスと SharePoint URL だけを管理者 Runbook に書く（キー本体は書かない）。
 4. **通知は共有チャネル**: 依頼窓口は共有 Teams チャネル（フォームを使う場合も通知先は共有チャネル or 共有メール）。個人宛にしない。
 5. **再現コマンドを固定**: `scripts/publish_peer.ps1`（または .bat）1本＋「成功の定義」（社一覧が更新され、monitor xlsx の日付が今日）。後任はこれを回せばよい。

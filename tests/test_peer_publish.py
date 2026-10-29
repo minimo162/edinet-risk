@@ -8,7 +8,7 @@ import json
 import os
 import re
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,7 @@ openpyxl = pytest.importorskip("openpyxl")
 from edinet_risk import m1_compare, m1_report, peer_publish as pp  # noqa: E402
 from edinet_risk.__main__ import main  # noqa: E402
 from edinet_risk.config import ConfigError, load_settings  # noqa: E402
+from edinet_risk.store.db import JST  # noqa: E402
 
 from test_report import CUR, PREV, TH  # noqa: E402
 
@@ -216,9 +217,22 @@ def test_check_requires_five_and_todays_files(tmp_path):
     for n in ("risk_diff.xlsx", "monitor.xlsx", "社一覧.xlsx", "週次要約.md", "社別/7261_マツダ.md"):
         (pub / n).write_bytes(b"x")
     assert pp.check(pub) == []
-    old = (date.today().toordinal() - 7 - date(1970, 1, 1).toordinal()) * 86400 + 12 * 3600
+    old = (pp.today_jst().toordinal() - 7 - date(1970, 1, 1).toordinal()) * 86400 + 12 * 3600
     os.utime(pub / "monitor.xlsx", (old, old))
     assert [b.split(" (")[0] for b in pp.check(pub)] == ["not updated today: monitor.xlsx"]
+
+
+def test_check_uses_jst_dates_like_build(tmp_path):
+    """A file written at 00:30 JST counts as that JST day (build's today_jst), whatever the local time zone."""
+    pub = tmp_path / "publish"
+    (pub / "社別").mkdir(parents=True)
+    for n in ("risk_diff.xlsx", "monitor.xlsx", "社一覧.xlsx", "週次要約.md", "社別/7261_マツダ.md"):
+        (pub / n).write_bytes(b"x")
+    t = datetime(2026, 10, 29, 0, 30, tzinfo=JST).timestamp()   # = 2026-10-28 15:30 UTC
+    for n in ("monitor.xlsx", "社一覧.xlsx"):
+        os.utime(pub / n, (t, t))
+    assert pp.check(pub, date(2026, 10, 29)) == []
+    assert len(pp.check(pub, date(2026, 10, 28))) == 2
 
 
 # ---------------------------------------------------------------- CLI
@@ -343,7 +357,11 @@ def test_ps1_is_powershell51_safe():
         assert bad not in code, bad
     assert re.search(r"param\(\s*\[switch\]\$DryRun", text)
     assert "EDINET_API_KEY" in text and not re.search(r"EDINET_API_KEY\s*=", code)      # never set a key
-    assert "Remove-Item" not in code                                                      # overwrite only
+    # overwrite only; the one exception removes stale 社別\*.md in the sync folder (Remove-StaleMd)
+    fn = code[code.index("function Remove-StaleMd"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert code.count("Remove-Item") == fn.count("Remove-Item") == 1
+    assert '-Filter *.md' in fn and 'Join-Path $DestDir "社別"' in fn and "$keep -notcontains" in fn
 
 
 def _cli_options(cmd: list[str], capsys) -> str:
@@ -474,6 +492,94 @@ def test_ps1_fetch_summary_regex_matches_the_cli(tmp_path, capsys, monkeypatch):
     hits = [rx.search(ln) for ln in capsys.readouterr().out.splitlines()]
     hits = [h for h in hits if h]
     assert len(hits) == 1 and tuple(map(int, hits[0].groups())) == (0, 1, 0)
+
+
+def _block(code: str, start: str) -> str:
+    s = code[code.index(start):]
+    return s[:s.index("\n}\n")]
+
+
+def test_ps1_sync_copies_company_list_last_with_retry():
+    """F: 社一覧.xlsx is copied last (the 'done' mark), locked files are retried, the copied list is logged."""
+    code = _ps1_code()
+    assert re.search(r'\$CompanyList = "社一覧\.xlsx"', code)
+    sync = code[code.index("$rest = @($files | Where-Object { $_ -ne $CompanyList })"):]
+    sync = sync[:sync.index("} finally {")]
+    i_rest = sync.index("foreach ($rel in $rest)")
+    i_stale = sync.index("Remove-StaleMd $Work $Dest")
+    i_list = sync.index("Copy-Over (Join-Path $Work $CompanyList) (Join-Path $Dest $CompanyList)")
+    assert i_rest < i_stale < i_list
+    assert re.search(r"\} finally \{\s*Write-Log \(\"コピー済み", code)
+    copy = _block(code, "function Copy-Over")
+    assert "for ($i = 1; ; $i++)" in copy and "Start-Sleep -Seconds $CopyRetrySec" in copy
+    assert "$i -ge $CopyRetries" in copy and "throw" in copy
+
+
+def test_ps1_json_helper_logs_stderr():
+    """G: publish config / build failures keep their reason (stderr) in the log."""
+    fn = _block(_ps1_code(), "function Invoke-Json")
+    assert "2>&1" in fn
+    assert "-is [System.Management.Automation.ErrorRecord]" in fn and 'Write-Log ("    stderr: "' in fn
+    assert "-isnot [System.Management.Automation.ErrorRecord]" in fn          # only stdout goes to ConvertFrom-Json
+    code = _ps1_code()                      # lines before the log file exists (publish config) are kept and flushed
+    assert "$Script:Pending.Add($Text)" in _block(code, "function Write-Log")
+    assert "Add-Content -LiteralPath $Script:Log -Value $Script:Pending" in _block(code, "function Open-Log")
+    assert re.search(r"catch \{.*?-not \$Script:Log\).*?Open-Log", code, re.S)
+
+
+def test_ps1_dest_inside_work_is_rejected():
+    """M: dest_dir equal to / inside work_dir (or the reverse) throws before any CLI step."""
+    code = _ps1_code()
+    fn = _block(code, "function Test-SameOrUnder")
+    assert "OrdinalIgnoreCase" in fn and "Get-FullDir $Child" in fn
+    m = re.search(r"if \(\$Dest -and \(\(Test-SameOrUnder \$Dest \$Work\) -or \(Test-SameOrUnder \$Work \$Dest\)\)\) "
+                  r"\{\s*throw", code)
+    assert m and code.index(m.group(0)) < code.index('Invoke-Cli "targets"')
+    assert "TrimEnd('\\') + '\\'" in code     # a\b is not "inside" a\bc
+
+
+def test_ps1_compare_report_exit2_partial_vs_no_input(tmp_path, capsys):
+    """J: exit 2 with the summary line = some filers only (warn); exit 2 without it = no input (fail)."""
+    code = _ps1_code()
+    lines = [ln.strip() for ln in _joined(code) if ln.strip()]
+    for step, var in (("compare", "$CompareSummary"), ("report", "$ReportSummary")):
+        i = next(i for i, ln in enumerate(lines) if ln.startswith(f'Invoke-Cli "{step}"'))
+        assert lines[i + 1] == f'Assert-Partial "{step}" {var}', lines[i + 1]
+    fn = _block(code, "function Assert-Partial")
+    assert "-not $hit" in fn and "throw" in fn
+    text = PS1.read_text(encoding="utf-8-sig")
+    rx = {k: re.compile(re.search(rf"\${k}\s*=\s*'([^']+)'", text).group(1)) for k in ("CompareSummary", "ReportSummary")}
+    out = _outputs(tmp_path)
+    rd = out / f"resolve_{RUN}"
+    m0 = tmp_path / "m0"
+    args = ["compare", "--resolve", str(rd / "resolve_transport7.json"), "--m0", str(m0), "--cache",
+            str(tmp_path / "cache"), "--thresholds", str(TH), "--out", str(tmp_path / "m1b"), "--run-id", "x"]
+    assert main(args) == 2                                         # 前期なし工業 cannot be compared
+    assert any(rx["CompareSummary"].search(ln) for ln in capsys.readouterr().out.splitlines())
+    assert main(["report", "--run", str(tmp_path / "m1b" / "run_x")]) in (0, 2)
+    assert any(rx["ReportSummary"].search(ln) for ln in capsys.readouterr().out.splitlines())
+    args[2] = str(tmp_path / "none.json")
+    assert main(args) == 2                                         # no input
+    assert not any(rx["CompareSummary"].search(ln) for ln in capsys.readouterr().out.splitlines())
+    assert main(["report", "--run", str(tmp_path / "none")]) == 2
+    assert not any(rx["ReportSummary"].search(ln) for ln in capsys.readouterr().out.splitlines())
+
+
+def test_ps1_monitor_breach_and_fail_on_threshold(tmp_path, capsys):
+    """I: monitor runs without --fail-on-threshold (its exit 2 also means input error); breaches are read from
+    the summary line; -FailOnThreshold (default off) turns them into exit 3 after publishing."""
+    from test_monitor import make_db, run_monitor
+    code = _ps1_code()
+    assert re.search(r"\[switch\]\$FailOnThreshold", code)
+    lines = [ln.strip() for ln in _joined(code) if ln.strip()]
+    i = next(i for i, ln in enumerate(lines) if ln.startswith('Invoke-Cli "monitor"'))
+    assert "--fail-on-threshold" not in lines[i] and "-WarnCodes" not in lines[i] and lines[i + 1] == "Read-MonitorBreach"
+    assert re.search(r"if \(\$FailOnThreshold -and \$Script:Breached -gt 0\) \{.*?\$exit = 3", code, re.S)
+    rx = re.compile(re.search(r"\$MonitorSummary\s*=\s*'([^']+)'", PS1.read_text(encoding="utf-8-sig")).group(1))
+    make_db(tmp_path).close()
+    assert run_monitor(tmp_path) == 0
+    hits = [rx.search(ln) for ln in capsys.readouterr().out.splitlines()]
+    assert [int(h.group(1)) for h in hits if h] == [0]
 
 
 # ---------------------------------------------------------------- Copilot 見本ブック / 統合プロンプト
