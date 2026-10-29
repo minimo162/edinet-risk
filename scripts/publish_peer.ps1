@@ -230,6 +230,9 @@ try {
         $Out, $Work, $(if ($Dest) { $Dest } else { "(未設定: コピーしない)" }))
     Write-Log ("API キー: {0}" -f $cfg.api_key_source)
     Write-Log ("基準日T: {0}（publish.as_of。settings の run.as_of は {1}）" -f $cfg.as_of, $cfg.run_as_of)
+    if ($cfg.submit_to_extended) {
+        Write-Log ("当期の提出終端: {0}（as_of=today のため window.current.submit_to を基準日Tまで延長）" -f $cfg.submit_to)
+    }
     foreach ($w in @($cfg.warnings)) {
         if (-not $w) { continue }
         $Script:Warnings.Add($w)

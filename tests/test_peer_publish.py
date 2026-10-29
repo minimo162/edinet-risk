@@ -328,6 +328,14 @@ def test_as_of_is_today_unless_fixed():
     assert len(w) == 1 and "run.as_of" in w[0]
 
 
+def test_submit_to_is_extended_to_t_only_for_today():
+    end = date(2026, 9, 30)
+    assert pp.effective_submit_to("today", TODAY, end) == (TODAY, True)
+    assert pp.effective_submit_to("today", date(2026, 9, 1), end) == (end, False)
+    assert pp.effective_submit_to("2026-10-29", TODAY, end) == (end, False)       # fixed T: keep (and warn)
+    assert not pp.as_of_warnings(TODAY, date(2026, 9, 30), pp.effective_submit_to("today", TODAY, end)[0])
+
+
 def test_cli_config_gives_as_of_and_doclist_range(tmp_path, capsys):
     s = tmp_path / "settings.toml"
     cache = tmp_path / "cache"
@@ -336,12 +344,19 @@ def test_cli_config_gives_as_of_and_doclist_range(tmp_path, capsys):
     cfg = json.loads(capsys.readouterr().out)
     assert (cfg["as_of"], cfg["run_as_of"], cfg["today"]) == ("2026-10-29", "2026-09-30", "2026-10-29")
     assert (cfg["doclist_from"], cfg["doclist_to"]) == ("2026-08-29", "2026-10-29")      # empty cache: max 62 days
-    assert len(cfg["warnings"]) == 2                    # past window.current.submit_to + doclist capped
+    assert (cfg["submit_to"], cfg["submit_to_extended"]) == ("2026-10-29", True)        # as_of=today: extended
+    assert len(cfg["warnings"]) == 1 and "doclist_max_days" in cfg["warnings"][0]       # no submit_to warning
     s.write_text(f'[paths]\ncache_dir = "{cache.as_posix()}"\n[publish]\nas_of = "2026-09-30"\n'
                  'doclist_max_days = 8\n', encoding="utf-8")
     assert main(["publish", "config", "--config", str(s), "--today", "2026-10-29"]) == 0
     cfg = json.loads(capsys.readouterr().out)
     assert (cfg["as_of"], cfg["doclist_from"], cfg["warnings"]) == ("2026-09-30", "2026-10-22", [])
+    assert (cfg["submit_to"], cfg["submit_to_extended"]) == ("2026-09-30", False)
+    s.write_text(f'[paths]\ncache_dir = "{cache.as_posix()}"\n[publish]\nas_of = "2026-10-29"\n'
+                 'doclist_max_days = 8\n', encoding="utf-8")
+    assert main(["publish", "config", "--config", str(s), "--today", "2026-10-29"]) == 0
+    cfg = json.loads(capsys.readouterr().out)                    # fixed T past submit_to: not extended, warned
+    assert cfg["submit_to_extended"] is False and len(cfg["warnings"]) == 1 and "submit_to" in cfg["warnings"][0]
     for bad in ('as_of = "yesterday"', "doclist_max_days = 3"):
         s.write_text(f"[publish]\n{bad}\n", encoding="utf-8")
         assert main(["publish", "config", "--config", str(s)]) == 2

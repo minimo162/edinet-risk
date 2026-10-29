@@ -59,6 +59,17 @@ def as_of_date(setting: str, today: date) -> date:
     return today if setting == "today" else date.fromisoformat(setting)
 
 
+def effective_submit_to(setting: str, as_of: date, submit_to: date) -> tuple[date, bool]:
+    """(submit_to, extended): with publish.as_of "today" the current submit window runs at least to T.
+
+    The weekly run keeps going after window.current.submit_to (late / amended filings); the settings file
+    is not rewritten. A fixed as_of keeps the configured end (and the warning when T is past it).
+    """
+    if setting == "today" and as_of > submit_to:
+        return as_of, True
+    return submit_to, False
+
+
 def as_of_warnings(as_of: date, run_as_of: date, submit_to: date) -> list[str]:
     out = []
     if as_of > submit_to:

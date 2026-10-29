@@ -724,13 +724,15 @@ def _publish(a) -> int:
             as_of = publish.as_of_date(p.as_of, today)
             d_from, d_to, capped = publish.doclist_range(Path(s.paths.cache_dir), today, p.doclist_days,
                                                          p.doclist_max_days)
-            warnings = (publish.as_of_warnings(as_of, s.run.as_of, s.window.current.submit_to)
+            submit_to, extended = publish.effective_submit_to(p.as_of, as_of, s.window.current.submit_to)
+            warnings = (publish.as_of_warnings(as_of, s.run.as_of, submit_to)
                         + publish.doclist_warnings(d_from, capped, p.doclist_max_days))
             print(json.dumps({"dest_dir": p.dest_dir, "work_dir": p.work_dir, "out_dir": p.out_dir,
                               "targets": p.targets, "doclist_days": p.doclist_days,
                               "doclist_max_days": p.doclist_max_days, "doclist_from": d_from.isoformat(),
                               "doclist_to": d_to.isoformat(), "as_of": as_of.isoformat(),
                               "run_as_of": s.run.as_of.isoformat(), "today": today.isoformat(),
+                              "submit_to": submit_to.isoformat(), "submit_to_extended": extended,
                               "warnings": warnings, "db": str(s.paths.db_path),
                               "cache_dir": s.paths.cache_dir, "settings": s.source, "api_key_source": key_source}))
             return 0
