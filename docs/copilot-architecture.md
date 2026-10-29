@@ -5,7 +5,7 @@
 ## 推奨: 「CLI で作る → M365 Copilot で読む」二段構成
 1. **取得・抽出（管理用 Windows の CLI バッチ）**: `python -m edinet_risk` で対象社（指定社 or マツダ既定ピア `config/transport7.toml`）を取得・抽出・resolve・monitor。全社はバッチ専用。
 2. **受け渡し**: `publish_peer.ps1` が CLI 出力を正規名（`risk_diff.xlsx`・`monitor.xlsx`・`社一覧.xlsx`・社別リスク本文の前期/当期 md・`週次要約.md`）にリネームし、SharePoint の公開フォルダに置く。正規名とリネーム表は `docs/publish_peer.spec.md`（CLI 自体は run 固有の名前で出す）。利用者グループには閲覧権限だけ付け、利用者自身はフォルダを開かない。
-3. **分析（M365 Copilot Chat）**: 利用者は `docs/copilot-runbook.md` の統合プロンプト1本（公開ファイルのリンク入り、Teams にピン留め）を貼るだけ。Copilot がリンク先を読み、コードインタープリタで再計算して変化表・マツダ比較・要確認リストを1回で返す。
+3. **分析（M365 Copilot Chat）**: 利用者は `docs/copilot-runbook.md` の統合プロンプト1本（公開ファイルのリンク入り、Teams にピン留め）を貼るだけ。Copilot がリンク先を読み、公開ファイルの値をそのまま使って（文字数増減率などを再計算しない）6シートの Excel（対象確認・変化表・差分詳細・分析・マツダ比較・要確認）を1回で返す。
 
 ## 任意: Copilot Studio エージェント
 - 指示＝runbook の統合プロンプト、知識＝上記 SharePoint フォルダ。

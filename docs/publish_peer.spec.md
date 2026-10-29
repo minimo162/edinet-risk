@@ -25,6 +25,9 @@
 1. キーを `EDINET_API_KEY` か `paths.api_key_file` から読む（スクリプトに書かない）。
 2. 対象社 = `config/transport7.toml` ＋ 依頼社リスト（`publish targets`）。
 3. `doclist sync` → `resolve` → `fetch` → `extract` → `resolve` → `compare` → `report` → `monitor`。
+   取得ゲート: `doclist sync` が 0 以外（2 を含む）で終わったら、その週は公開しない。`fetch` が終了コード 2（一部失敗）のとき、
+   新規取得（`fetched` + `adopted_from_cache`）が 0 件なら公開しない。どちらも ps1 は終了コード 1 で終わり、同期フォルダは前回分のまま。
+   `fetch` が 0 で新規 0 件（取得対象がすべて取得済み）は正常として続行する。
 4. `publish build` が §1 の3種を生成し、ps1 が `risk_diff.xlsx`・`monitor.xlsx` を正規名でコピーする（`publish check` で点検）。
 5. 成功の定義: `publish/` の5種がそろい、`社一覧.xlsx` と `monitor.xlsx` の更新日が当日。1つでも欠けたら同期しない（前回分を残す）。
 6. `publish/` を SharePoint 同期フォルダへコピー。

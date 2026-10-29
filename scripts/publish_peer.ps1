@@ -8,6 +8,8 @@
   - API キーは EDINET_API_KEY 環境変数か settings の paths.api_key_file からだけ読む（このスクリプトは扱わない）。
   - 成功の定義（spec §2-5）: publish/ に5種がそろい、社一覧.xlsx と monitor.xlsx が当日付。
     1つでも欠けたら同期フォルダへはコピーしない（前回分が残る）。
+  - 取得ゲート（spec §2-3）: doclist sync が 0 以外で終わったら公開しない。fetch が終了コード 2 のとき、
+    新規取得（fetched + adopted_from_cache）が 0 件なら公開しない。どちらも終了コード 1（同期しない）。
   - 同期フォルダへは上書きコピーのみ（削除→新規作成にしない。リンクが変わるため）。
   - 手順の詳細は docs/admin-runbook.md。PowerShell 5.1 で動く書き方にしている（UTF-8 BOM 付きで保存すること）。
 
@@ -56,6 +58,10 @@ if ($Config) { $CfgArgs = @("--config", $Config) }
 $Stamp = Get-Date -Format "yyyyMMdd'T'HHmmss"
 $Script:Log = $null
 $Script:Warnings = New-Object System.Collections.Generic.List[string]
+$Script:CliOut = New-Object System.Collections.Generic.List[string]   # 直前の Invoke-Cli の出力行
+$Script:LastRc = 0
+# fetch の集計行（__main__._fetch の print と一致させる。tests/test_peer_publish.py で照合）
+$FetchSummary = 'fetched=(\d+) adopted_from_cache=(\d+) failed=(\d+)'
 
 function Write-Log([string]$Text) {
     Write-Host $Text
@@ -66,14 +72,17 @@ function Format-Args([string[]]$CliArgs) {
     ($CliArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join " "
 }
 
-# 既存 CLI を1つ実行する。終了コード 0 と WarnCodes 以外で止める。
+# 既存 CLI を1つ実行する。終了コード 0 と WarnCodes 以外で止める。出力行は $Script:CliOut に残す。
 function Invoke-Cli([string]$Step, [string[]]$CliArgs, [int[]]$WarnCodes = @()) {
     Write-Log ("[{0}] {1} -m edinet_risk {2}" -f $Step, $Python, (Format-Args $CliArgs))
+    $Script:CliOut.Clear()
+    $Script:LastRc = 0
     if ($DryRun) { return }
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"   # PowerShell 5.1: 標準エラーの行で止めない
-    & $Python -m edinet_risk @CliArgs 2>&1 | ForEach-Object { Write-Log ("    " + $_) }
+    & $Python -m edinet_risk @CliArgs 2>&1 | ForEach-Object { $Script:CliOut.Add("$_"); Write-Log ("    " + $_) }
     $rc = $LASTEXITCODE
+    $Script:LastRc = $rc
     $ErrorActionPreference = $prev
     if ($rc -eq 0) { return }
     if ($WarnCodes -contains $rc) {
@@ -82,6 +91,22 @@ function Invoke-Cli([string]$Step, [string[]]$CliArgs, [int[]]$WarnCodes = @()) 
         return
     }
     throw ("{0} が終了コード {1} で失敗しました。同期フォルダは更新しません（前回分が残ります）。" -f $Step, $rc)
+}
+
+# fetch のゲート: 終了コード 2 で新規取得 0 件（または集計行なし＝設定・DB の誤り）なら止める。
+function Assert-FetchGate {
+    if ($DryRun) { return }
+    $m = $null
+    foreach ($ln in $Script:CliOut) { if ($ln -match $FetchSummary) { $m = $Matches } }
+    if ($null -eq $m) {
+        if ($Script:LastRc -ne 0) { throw "fetch が集計前に失敗しました（ログを確認）。同期フォルダは更新しません（前回分が残ります）。" }
+        return
+    }
+    $new = [int]$m[1] + [int]$m[2]
+    Write-Log ("    -> 新規取得 {0} 件（fetched {1} + adopted_from_cache {2}）、失敗 {3} 件" -f $new, $m[1], $m[2], $m[3])
+    if ($Script:LastRc -ne 0 -and $new -eq 0) {
+        throw "fetch: 新規取得 0 件でエラーがあります。古いデータを当日分として公開しないため止めます（前回分が残ります）。"
+    }
 }
 
 # JSON を出す helper（publish config / publish build）を実行して結果を返す。
@@ -138,12 +163,14 @@ try {
     if (-not $SkipDoclist) {
         $from = (Get-Date).AddDays(-([int]$cfg.doclist_days - 1)).ToString("yyyy-MM-dd")
         $to = (Get-Date).ToString("yyyy-MM-dd")
-        Invoke-Cli "doclist" (@("doclist", "sync", "--from", $from, "--to", $to) + $CfgArgs) -WarnCodes @(2)
+        # 書類一覧が取れない週は公開しない（終了コード 2 も失敗扱い。WarnCodes なし）
+        Invoke-Cli "doclist" (@("doclist", "sync", "--from", $from, "--to", $to) + $CfgArgs)
     }
 
     # ---- 3. resolve → fetch → extract → resolve
     Invoke-Cli "resolve(pre)" (@("resolve", "--targets", $Targets, "--run-id", $R1, "--out", $Out, "--cache", $Cache) + $CfgArgs)
     Invoke-Cli "fetch" (@("fetch", "--targets", $Targets, "--run-id", $R1, "--include-pending") + $CfgArgs) -WarnCodes @(2)
+    Assert-FetchGate
     Invoke-Cli "extract" (@("extract") + $CfgArgs)
     Invoke-Cli "resolve" (@("resolve", "--targets", $Targets, "--run-id", $R2, "--out", $Out, "--cache", $Cache) + $CfgArgs)
 

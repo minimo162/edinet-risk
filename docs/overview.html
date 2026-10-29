@@ -102,7 +102,7 @@
 <p class="lead">
   有価証券報告書「<b>事業等のリスク</b>」が前期から当期でどう変わったかを、
   社内の誰でも <b>M365 Copilot Chat に統合プロンプト1本を貼るだけ</b> で読めるようにする。
-  1回の回答で変化表・マツダ比較・要確認リストがまとめて返る。
+  1回の回答で6シートの Excel（対象確認・変化表・差分詳細・分析・マツダ比較・要確認）が返る。
 </p>
 <h3>利用者の操作（これだけ）</h3>
 <div class="user-steps">
@@ -110,7 +110,7 @@
   <div class="arrow">→</div>
   <div class="step"><div class="n">2</div><b>貼って送信</b><div class="zone">M365 Copilot Chat（Teams の Copilot か microsoft365.com）。社を指定するときだけ1行目に書く</div></div>
   <div class="arrow">→</div>
-  <div class="step"><div class="n">3</div><b>読む</b><div class="zone">変化表・マツダ比較・要確認リスト（対象外の社は冒頭に表示）</div></div>
+  <div class="step"><div class="n">3</div><b>読む</b><div class="zone">6シートの Excel（対象確認・変化表・差分詳細・分析・マツダ比較・要確認。対象外の社は対象確認シートに表示）</div></div>
 </div>
 <p class="sub">SharePoint は管理者が結果ファイルを置く裏側の置き場。<span class="warn">利用者は開かない</span>（Copilot がプロンプト内のリンクから読む）。設計上の想定で、公開フォルダとピン留め投稿は未作成。</p>
 <ul>
@@ -136,7 +136,7 @@
   <div class="card ms">
     <h3>Microsoft 365 Copilot</h3>
     <div class="where">Microsoft 365 側</div>
-    <p>プロンプト内のリンクから SharePoint のファイルを利用者の権限で読み、外部通信できない隔離実行環境で集計し直して答える。</p>
+    <p>プロンプト内のリンクから SharePoint のファイルを利用者の権限で読み、外部通信できない隔離実行環境で Excel にまとめて返す（数値は公開ファイルの値を使い、再計算しない）。</p>
     <p class="sub warn">EDINET には届かない</p>
   </div>
   <div class="card done">
@@ -153,22 +153,22 @@
 <div class="flow">
   <div class="step done"><div class="n">1</div><b>EDINET API</b><div class="zone">社外・取得は確認済み</div></div>
   <div class="arrow">→</div>
-  <div class="step todo"><div class="n">2</div><b>publish_peer.ps1</b><div class="zone">管理用 Windows・タスクスケジューラで週次</div></div>
+  <div class="step done"><div class="n">2</div><b>publish_peer.ps1</b><div class="zone">管理用 Windows・タスクスケジューラで週次（作成済み・社内 Windows で未実行）。書類一覧の失敗／新規取得0件でエラー → 公開しない</div></div>
   <div class="arrow">→</div>
-  <div class="step todo"><div class="n">3</div><b>抽出→対応付け→監視</b><div class="zone">SQLite に保存</div></div>
+  <div class="step done"><div class="n">3</div><b>抽出→対応付け→監視</b><div class="zone">SQLite に保存</div></div>
   <div class="arrow">→</div>
-  <div class="step todo"><div class="n">4</div><b>SharePoint</b><div class="zone">publish_peer が CLI 出力を正規名 risk_diff.xlsx / monitor.xlsx / 社一覧.xlsx / 社別 md / 週次要約.md にリネームして配置（管理者のみが触る。正規名は publish_peer.spec.md）</div></div>
+  <div class="step todo"><div class="n">4</div><b>SharePoint</b><div class="zone">publish_peer が正規名 risk_diff.xlsx / monitor.xlsx / 社一覧.xlsx / 社別 md / 週次要約.md をそろえ、5種そろって当日付のときだけ同期フォルダへ上書き（管理者のみが触る。正規名は publish_peer.spec.md）</div></div>
   <div class="arrow">→</div>
   <div class="step"><div class="n">5</div><b>M365 Copilot Chat</b><div class="zone">統合プロンプト1本を受け、リンク先を読んで集計</div></div>
   <div class="arrow">→</div>
-  <div class="step"><div class="n">6</div><b>一般ユーザ</b><div class="zone">1回の回答で変化表・マツダ比較・要確認</div></div>
+  <div class="step"><div class="n">6</div><b>一般ユーザ</b><div class="zone">1回の回答で6シートの Excel</div></div>
 </div>
 <p class="sub">対象外の社 → 共有 Teams チャネルで依頼 → 次回バッチで追加。キーは環境変数かキーファイルから読む。</p>
 
 <div class="zones">
   <div class="zone-box ext">
     <h3>社外</h3>
-    <ul><li>EDINET API</li><li>GitHub（minimo162/edinet-risk, main = <code>e417520</code>）</li><li>開発環境（このボットのコンピュータ）</li></ul>
+    <ul><li>EDINET API</li><li>GitHub（minimo162/edinet-risk, main、2026-10-29 時点）</li><li>開発環境（このボットのコンピュータ）</li></ul>
   </div>
   <div class="zone-box corp">
     <h3>社内（Windows のみ）</h3>
@@ -187,7 +187,7 @@
   <div class="p-done">M0 調査 ✔</div>
   <div class="p-done">M1 7社再現 ✔</div>
   <div class="p-wip">M2 プライム拡大 …</div>
-  <div class="p-todo">Copilot 公開</div>
+  <div class="p-wip">Copilot 公開 …</div>
 </div>
 <div class="grid">
   <div class="card done">
@@ -200,16 +200,16 @@
   </div>
   <div class="card wip">
     <h3><span class="badge b-wip">途中</span>M2 プライム拡大</h3>
-    <p>1,543社、取得・抽出 3,358件、突合率 99.55%、monitor あり、pytest 346 passed。第3バッチまで。</p>
+    <p>1,543社、取得・抽出 3,358件、突合率 99.55%、monitor あり、pytest 365 passed。第3バッチまで。</p>
     <p class="sub">合格宣言はまだ（人手確認待ち: unknown 6社・late 1社 ほか）</p>
   </div>
   <div class="card wip">
-    <h3><span class="badge b-wip">途中</span>Copilot 設計ドキュメント</h3>
-    <p>一式を書いたが未 push。</p>
+    <h3><span class="badge b-done">できている</span>Copilot 用プロンプトと見本ブック</h3>
+    <p><code>copilot-runbook.md</code>（6シート: 対象確認・変化表・差分詳細・分析・マツダ比較・要確認。CLI の8分類→追加/削除/改訂の対応表）、<code>docs/templates/yoY_report_template.xlsx</code>。</p>
   </div>
   <div class="card todo">
-    <h3><span class="badge b-todo">これから</span>公開の仕組み</h3>
-    <p><code>publish_peer.ps1</code>（仕様とリネーム表は <code>publish_peer.spec.md</code>。<code>社一覧.xlsx</code>・社別 md・<code>週次要約.md</code> は CLI 未出力でここで生成）・管理者 Runbook・SharePoint 公開フォルダと閲覧権限・リンク入り統合プロンプトの Teams ピン留め・Teams 依頼窓口。</p>
+    <h3><span class="badge b-wip">途中</span>公開の仕組み</h3>
+    <p>作成済み: <code>publish_peer.ps1</code>・<code>publish build/check</code>（<code>社一覧.xlsx</code>・社別 md・<code>週次要約.md</code> を生成、取得ゲートと成功判定）・管理者 Runbook。これから: SharePoint 公開フォルダと閲覧権限・リンク入り統合プロンプトの Teams ピン留め・Teams 依頼窓口。</p>
   </div>
   <div class="card todo">
     <h3><span class="badge b-todo">これから</span>社内 Windows で動作確認</h3>
@@ -238,10 +238,10 @@
 <!-- 次のMVP -->
 <h2>次の MVP（この順番で）</h2>
 <ol class="steps-ol">
-  <li><code>publish_peer.ps1</code> を作り、社内 Windows で動かす</li>
+  <li><code>publish_peer.ps1</code> を社内 Windows で動かす（作成済み）</li>
   <li>タスクスケジューラ＋SharePoint 同期で週次公開</li>
   <li>統合プロンプトに実リンクを入れ、共有 Teams チャネルにピン留め</li>
-  <li><code>docs/admin-runbook.md</code>・キー配置手順・離任前チェックリスト</li>
+  <li><code>docs/admin-runbook.md</code>（作成済み）を実機の手順に合わせて直す</li>
   <li>非エンジニア1名でパイロットし、つまずきを反映（最初に「リンクだけで Copilot が読めるか」を確認: <code>copilot-runbook.md</code>「パイロット第1確認」）</li>
   <li>（任意）Copilot Studio エージェント化</li>
 </ol>
@@ -250,7 +250,7 @@
   <p>管理用 Windows の機械 ／ SharePoint の場所と利用者グループの閲覧権限 ／ 更新頻度 ／ 依頼窓口（Teams かフォームか）／ Studio 化の有無</p>
 </div>
 
-<footer>詳細: easiest-path.md（運用方式）・copilot-runbook.md（統合プロンプト）・copilot-chat-specs.md（M365 の仕様）・copilot-architecture.md（構成）・m1-progress.md / m2-progress.md（開発記録）</footer>
+<footer>詳細: easiest-path.md（運用方式）・copilot-runbook.md（統合プロンプト）・copilot-chat-specs.md（M365 の仕様）・copilot-architecture.md（構成）・publish_peer.spec.md（公開ファイル）・admin-runbook.md（管理者手順）・m1-progress.md / m2-progress.md（開発記録）</footer>
 </main>
 </body>
 </html>

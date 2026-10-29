@@ -92,7 +92,8 @@ schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
 
 - 終了コード 0 = 成功（タスクスケジューラの「前回の実行結果」が 0x0）、1 = 失敗（同期していない）。
 - ログ: `out\publish\logs\publish_peer_<日時>.log`（キーは出ない）。
-- 「完了（警告 n 件…）」は続行できた警告（終了コード 2: doclist／fetch の一時失敗、compare の前期なしで比較できない社、report の照合で全文一致しない社）。`monitor.xlsx` の要確認を見る。
+- 「完了（警告 n 件…）」は続行できた警告（終了コード 2: fetch の一部失敗（新規取得が1件以上ある場合）、compare の前期なしで比較できない社、report の照合で全文一致しない社）。`monitor.xlsx` の要確認を見る。
+- doclist sync の失敗（終了コード 2 を含む）と、fetch の「新規取得 0 件でエラーあり」は失敗（終了コード 1、同期しない）。古いデータを当日分として公開しないため。
 - 公開フォルダの `社一覧.xlsx`・`monitor.xlsx` の更新日が当日になっていること。
 
 ## 7. 失敗したとき
@@ -101,6 +102,8 @@ schtasks /Run /TN "edinet-risk publish_peer"     # 登録直後に1回試す
 |---|---|---|
 | 「API キーがありません」 | §2 の環境変数／`api_key_file` | 実行ユーザーの環境変数を確認、タスクスケジューラを開き直す。Git に載せない |
 | fetch／doclist が終了コード 4 | キーの有効性（401/403） | キーを再発行して差し替え |
+| 「doclist が終了コード 2 で失敗」 | ログの `failed <日付>` / `not fetched=` | 一時障害なら時間をおいて再実行（取得済みの日はキャッシュから読むので速い） |
+| 「fetch: 新規取得 0 件でエラーがあります」 | ログの `failed` / `retry` の書類 | 再実行。続くなら EDINET 側の障害か書類の取下げを確認 |
 | `publish check` NOT OK | ログの `missing:` / `not updated today:` | 欠けた CLI 出力を確認。同期は走っていない（前回分が残る） |
 | SharePoint に古いまま | `dest_dir`・OneDrive の同期状態 | パス誤り or 同期停止（サインイン切れ） |
 | 利用者「ファイル開けない」 | 閲覧権限・リンク切れ | 権限付与、ピン留め更新。正規名を変えていないか |

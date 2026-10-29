@@ -335,3 +335,70 @@ def test_ps1_reads_existing_json_keys(tmp_path, capsys):
         assert keys <= set(obj), f"${var}: {keys - set(obj)} not in the JSON"
     for k in re.findall(r'\$built\.copies\."([^"]+)"', text):
         assert k in built["copies"], k
+
+
+def _ps1_code() -> str:
+    text = PS1.read_text(encoding="utf-8-sig")
+    return "\n".join(ln.split("#")[0] for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def test_ps1_gate_doclist_failure_blocks_publish():
+    """doclist sync: any non-zero exit (incl. 2) throws -> exit 1, no sync (spec §2-3)."""
+    code = _ps1_code()
+    line = next(ln for ln in code.splitlines() if re.search(r'Invoke-Cli\s+"doclist"', ln))
+    assert "-WarnCodes" not in line, line
+    assert re.search(r'catch \{.*?\$exit = 1', code, re.S)
+
+
+def test_ps1_gate_fetch_zero_new_with_errors_blocks_publish():
+    """fetch exit 2 is a warning only when something new came in; the gate runs right after fetch."""
+    code = _ps1_code()
+    lines = [ln.strip() for ln in code.splitlines() if ln.strip()]
+    i = next(i for i, ln in enumerate(lines) if ln.startswith('Invoke-Cli "fetch"'))
+    assert lines[i + 1] == "Assert-FetchGate"
+    gate = code[code.index("function Assert-FetchGate"):]
+    gate = gate[:gate.index("\n}\n")]
+    assert "$Script:LastRc -ne 0 -and $new -eq 0" in gate and "throw" in gate
+    assert "[int]$m[1] + [int]$m[2]" in gate                    # fetched + adopted_from_cache
+    # no summary line + non-zero exit (config / DB error before fetching) also throws
+    assert re.search(r"\$null -eq \$m\).*?LastRc -ne 0.*?throw", gate, re.S)
+
+
+def test_ps1_fetch_summary_regex_matches_the_cli(tmp_path, capsys, monkeypatch):
+    """$FetchSummary in the script parses the real `fetch` summary line."""
+    from test_fetch import _no_network, make_zip, setup_db
+    m = re.search(r"\$FetchSummary\s*=\s*'([^']+)'", PS1.read_text(encoding="utf-8-sig"))
+    assert m, "$FetchSummary not found"
+    rx = re.compile(m.group(1))
+    monkeypatch.delenv("EDINET_API_KEY", raising=False)
+    setup_db(tmp_path).close()
+    (tmp_path / "cache" / "docs").mkdir(parents=True)
+    (tmp_path / "cache" / "docs" / "D0000001_type1.zip").write_bytes(make_zip())
+    _no_network(monkeypatch)
+    assert main(["fetch", "--db", str(tmp_path / "t.sqlite"), "--cache", str(tmp_path / "cache"),
+                 "--offline", "--entity", "E00001"]) == 0
+    hits = [rx.search(ln) for ln in capsys.readouterr().out.splitlines()]
+    hits = [h for h in hits if h]
+    assert len(hits) == 1 and tuple(map(int, hits[0].groups())) == (0, 1, 0)
+
+
+# ---------------------------------------------------------------- Copilot 見本ブック / 統合プロンプト
+SHEETS = ["対象確認", "変化表", "差分詳細", "分析", "マツダ比較", "要確認"]
+
+
+def test_template_has_six_sheets_with_autofilter():
+    wb = openpyxl.load_workbook(ROOT / "docs" / "templates" / "yoY_report_template.xlsx")
+    assert wb.sheetnames == ["使い方", *SHEETS]
+    for n in SHEETS:
+        assert (wb[n].auto_filter.ref or "").startswith("A5:"), n
+
+
+def test_runbook_prompt_maps_every_cli_label():
+    from edinet_risk.report.excel import LABEL_JA
+    text = (ROOT / "docs" / "copilot-runbook.md").read_text(encoding="utf-8")
+    prompt = text[text.index("## 統合プロンプト"):text.index("## 回答がおかしいとき")]
+    table = prompt[prompt.index("【変更種別の対応"):]
+    for ja in LABEL_JA.values():
+        assert ja in table, ja
+    assert " → ".join(SHEETS).replace(" → ", "` → `") in prompt
+    assert "再計算しない" in prompt and "4節" not in text and "4シート" not in text
