@@ -38,7 +38,7 @@
 1. 管理用 Windows のタスクスケジューラが `publish_peer.ps1` を起動する（キーは環境変数かキーファイルから読む）。
 2. EDINET API から書類一覧と本文を取得する（1秒間隔・並列1）。**書類一覧が取れない週、または本文の新規取得が0件でエラーがある週は公開しない**（終了コード 1。公開フォルダは前回分のまま）。
 3. 抽出 → 対応付け → 監視を行い、SQLite に保存する。
-4. `publish_peer.ps1` が CLI 出力（例: `risk_diff_transport7.xlsx`）を正規名 `risk_diff.xlsx`・`monitor.xlsx` にリネームし、`社一覧.xlsx`・社別 md・`週次要約.md` を生成する（`publish build`）。5種がそろい `社一覧.xlsx`・`monitor.xlsx` が当日付のときだけ（`publish check`）SharePoint の同期フォルダへ上書きコピーする（管理者のみが触る）。正規名とリネーム表は `publish_peer.spec.md` が唯一の定義。
+4. `publish_peer.ps1` が CLI 出力（例: `risk_diff_transport7.xlsx`）を正規名 `risk_diff.xlsx`・`monitor.xlsx` にリネームし、`社一覧.xlsx`・社別 md・`週次要約.md` を生成する（`publish build`）。5種がそろい `社一覧.xlsx`・`monitor.xlsx` が当日付のときだけ（`publish check`）SharePoint の同期フォルダへ上書きコピーする（管理者のみが触る。同期できない環境では `-NoSync` で作り、管理者が同じ規則で手動アップロードする）。正規名とリネーム表は `publish_peer.spec.md` が唯一の定義。
 5. 利用者が M365 Copilot Chat に統合プロンプト1本を貼る（§3）。
 6. Copilot がリンク先のファイルを読み、6シートの Excel を1回で返す。
 7. 対象外の社は共有 Teams チャネルで依頼 → 次回バッチで追加。
@@ -70,7 +70,7 @@
 ## 7. 次の MVP（この順番で）
 
 1. `publish_peer.ps1` を社内 Windows で動かす（作成済み。`admin-runbook.md` の手順で初回実行）。
-2. タスクスケジューラ＋SharePoint 同期で週次公開する。
+2. タスクスケジューラ＋SharePoint 同期または手動アップロード（同期できない環境。`admin-runbook.md` §12）で週次公開する。
 3. 統合プロンプトに実リンクを入れ、共有 Teams チャネルにピン留めする（利用者はこれをコピーして貼るだけ）。
 4. `docs/admin-runbook.md`（キー配置手順・離任前チェックリストを含む。作成済み）を実機の手順に合わせて直す。
 5. 非エンジニア1名でパイロットし、つまずきを反映する。最初に「Copilot がリンクだけでファイルを読めるか」を確認する（`copilot-runbook.md`「パイロット第1確認」）。

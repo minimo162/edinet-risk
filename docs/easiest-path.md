@@ -30,7 +30,7 @@
 
 ## 3. 管理者（一度だけ／定期） vs 利用者（毎回）
 - 管理者（一度だけ）: **社内 Windows** に edinet-risk を構築する（Python は管理用マシンのみ）。キーは Windows の保護された場所（例: ACL 付きファイルを `paths.api_key_file` で指す、またはタスクを実行するユーザーの **ユーザー環境変数** `EDINET_API_KEY`。`docs/admin-runbook.md` §2）。SharePoint 公開フォルダ（利用者グループに閲覧権限のみ）・リンク入り統合プロンプトの Teams ピン留め・依頼窓口を用意する。利用者 PC には CLI を入れない。
-- 管理者（定期）: 既定ピア＋依頼社について doclist → resolve → fetch → extract → resolve → compare → report → monitor を実行し（`scripts/publish_peer.ps1`）、結果を SharePoint へ置く。Windows のタスクスケジューラ＋ OneDrive/SharePoint 同期が望ましい。
+- 管理者（定期）: 既定ピア＋依頼社について doclist → resolve → fetch → extract → resolve → compare → report → monitor を実行し（`scripts/publish_peer.ps1`）、結果を SharePoint へ置く。Windows のタスクスケジューラ＋ OneDrive/SharePoint 同期が望ましい。同期できない環境では `-NoSync` で `publish/` を作り、管理者が SharePoint へ「置き換え」で手動アップロードする（当面の社内運用。`docs/admin-runbook.md` §12）。
 - 利用者（毎回）: M365 Copilot Chat に統合プロンプト1本を貼るだけ。ファイル指定も SharePoint 閲覧も不要（公開名は `docs/publish_peer.spec.md` の正規名で固定、リンクはプロンプトに入っている）。
 
 ## 4. キーの扱い
@@ -40,7 +40,7 @@
 
 ## 5. 次に作る最小 MVP
 1. `scripts/publish_peer.ps1`: transport7（＋依頼社リスト）について doclist → resolve → fetch → extract → resolve → compare → report → monitor を実行し、CLI 出力（例: `risk_diff_transport7.xlsx`、`monitor_<run-id>/monitor.xlsx`）を `publish/` に正規名（`risk_diff.xlsx`・`monitor.xlsx`・`社一覧.xlsx`・社別 md・`週次要約.md`）でリネームして置く（Windows）。正規名とリネーム表は `docs/publish_peer.spec.md`。
-2. `publish/` を SharePoint の同期フォルダへコピーする（タスクスケジューラで毎週）。
+2. `publish/` を SharePoint の同期フォルダへコピーする（タスクスケジューラで毎週）。同期できない環境では管理者が毎週手動でアップロードする（`docs/admin-runbook.md` §12）。
 3. runbook の統合プロンプト1本に公開ファイルの実リンクを入れ、共有 Teams チャネルにピン留めする（SharePoint には置かない。利用者に開かせないため）。
 4. マツダピアで、非エンジニア1名にパイロット利用してもらい、つまずいた点を runbook に反映する。特に「リンク参照だけで Copilot が xlsx を読めるか」を最初に確認する（`docs/copilot-runbook.md`「パイロット第1確認」。だめなら `週次要約.md`＋社別 md で回答させる）。
 5. 管理者用 Runbook 雛形（`docs/admin-runbook.md`）と専用ユーザー／キーファイル前提の配置手順を書く。
@@ -55,7 +55,7 @@
 
 ### いまの案の弱み（引き継ぎで壊れやすい点）
 - キーが「前任者の個人フォルダや個人環境変数」にだけあると、アカウント削除・PC返却と同時に取得が止まる。
-- タスクスケジューラ / OneDrive 同期 / SharePoint の場所がドキュメント化されていないと、後任が「何が自動で動いているか」分からない。
+- タスクスケジューラ / OneDrive 同期（または手動アップロードの手順）/ SharePoint の場所がドキュメント化されていないと、後任が「何が自動で動いているか」分からない。
 - 依頼窓口（Teams チャネルまたはフォーム）の通知先が個人メール／個人 Teams だと、後任に届かない。
 - `publish/` の作り方とアップロード手順が口頭だけだと属人化する。
 

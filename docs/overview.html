@@ -157,7 +157,7 @@
   <div class="arrow">→</div>
   <div class="step done"><div class="n">3</div><b>抽出→対応付け→監視</b><div class="zone">SQLite に保存</div></div>
   <div class="arrow">→</div>
-  <div class="step todo"><div class="n">4</div><b>SharePoint</b><div class="zone">publish_peer が正規名 risk_diff.xlsx / monitor.xlsx / 社一覧.xlsx / 社別 md / 週次要約.md をそろえ、5種そろって当日付のときだけ同期フォルダへ上書き（管理者のみが触る。正規名は publish_peer.spec.md）</div></div>
+  <div class="step todo"><div class="n">4</div><b>SharePoint</b><div class="zone">publish_peer が正規名 risk_diff.xlsx / monitor.xlsx / 社一覧.xlsx / 社別 md / 週次要約.md をそろえ、5種そろって当日付のときだけ同期フォルダへ上書き（管理者のみが触る。同期できない環境では -NoSync で作り管理者が同じ規則で手動アップロード。正規名は publish_peer.spec.md）</div></div>
   <div class="arrow">→</div>
   <div class="step"><div class="n">5</div><b>M365 Copilot Chat</b><div class="zone">統合プロンプト1本を受け、リンク先を読んで集計</div></div>
   <div class="arrow">→</div>
@@ -239,7 +239,7 @@
 <h2>次の MVP（この順番で）</h2>
 <ol class="steps-ol">
   <li><code>publish_peer.ps1</code> を社内 Windows で動かす（作成済み）</li>
-  <li>タスクスケジューラ＋SharePoint 同期で週次公開</li>
+  <li>タスクスケジューラ＋SharePoint 同期または手動アップロード（同期できない環境。admin-runbook.md §12）で週次公開</li>
   <li>統合プロンプトに実リンクを入れ、共有 Teams チャネルにピン留め</li>
   <li><code>docs/admin-runbook.md</code>（作成済み）を実機の手順に合わせて直す</li>
   <li>非エンジニア1名でパイロットし、つまずきを反映（最初に「リンクだけで Copilot が読めるか」を確認: <code>copilot-runbook.md</code>「パイロット第1確認」）</li>
