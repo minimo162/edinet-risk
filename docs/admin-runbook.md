@@ -49,6 +49,31 @@
 2. `settings.toml` の `[publish]` を `targets = ["config/transport7.toml", "config/requests.toml"]` にする。
 3. `-DryRun` で確認し、次回の定期実行を待つか手動で実行する。`secCode` が見つからないときは `codes sync` を流し直す。
 
+### 依頼社リストを自動で作る（`publish requests`）
+
+手で書く代わりに、`codes sync` で DB（`edinet_codes`）に入った上場会社（上場区分が上場・証券コードあり）から `config\requests.toml` を作れる。全社が `group = "依頼"` になり、`settings.toml` の `publish.targets` にある社（transport7 のピア）は除かれる。ネットワークは使わない（DB は読み取りだけ）。
+
+```powershell
+.venv\Scripts\python -m edinet_risk publish requests --out config\requests.toml --limit 100 --dry-run   # 件数と先頭の社を見るだけ
+.venv\Scripts\python -m edinet_risk publish requests --out config\requests.toml --limit 100             # 書き出す
+```
+
+| オプション | 意味 |
+|---|---|
+| `--out <toml>`（必須） | 出力先。既にあるときは上書きせず終了コード 2（上書きは `--force`） |
+| `--limit N` | 証券コード順の先頭 N 社（まず 100 社で試す） |
+| `--sec-from XXXX` `--sec-to XXXX` | 証券コード 4 桁の範囲（両端を含む。英字入りのコードは大文字の文字列として比べる） |
+| `--sector <業種>…` | 提出者業種の完全一致（複数可）。`cache\codes\Edinetcode.zip`（`codes sync` が保存）から読む。ない業種名を書くと候補の一覧を出して終了コード 2 |
+| `--with-filing` | 当期の窓（`[window.current]` の期末の範囲）に対象の有報（`config\filing_filter.toml` の `[annual_report]`）が DB にある社だけにする。様式の違う会社（投資法人など）や当期の有報がない会社を入れると、`社一覧.xlsx` に「当期書類なし」の行が出て、monitor の突合率が閾値を下回りやすい |
+| `--exclude <toml>…` | 除く社のリスト（既定: `publish.targets` のうち `--out` 以外） |
+| `--dry-run` | 書かずに件数と先頭の社を表示 |
+
+- 絞り込みの順: 上場・証券コードあり → 除外 → 証券コード範囲 → 業種 → `--with-filing` → 証券コード順 → `--limit`。
+- 同じ提出者名の会社が 2 社以上あるときは、その社だけ `label` を「提出者名（証券コード）」にする（社別 md の名前や全文差分 HTML の取り違えを防ぐ）。
+- 生成したファイルには実行日時を書かない（同じ DB・同じ条件なら同じファイル）。条件は 1 行目のコメントに出る。
+- 手順: 生成 → `settings.toml` の `targets` に `"config/requests.toml"` を足す（上の 2.）→ `-DryRun` → 本実行。会社を増やすと取得時間・`cache` の容量・公開する社別 md の数が増える。
+- `config\requests.toml` はローカルのファイル。リポジトリにコミットしない。
+
 ## 4. 手動実行・DryRun
 
 ```powershell

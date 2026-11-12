@@ -1,6 +1,6 @@
 """Weekly peer publication helpers for ``scripts/publish_peer.ps1`` (docs/publish_peer.spec.md, offline).
 
-Used through ``python -m edinet_risk publish {config,targets,build,check}``. The CLI keeps its run-specific
+Used through ``python -m edinet_risk publish {config,targets,requests,build,check}``. The CLI keeps its run-specific
 names; this module writes the files the CLI does not produce, under the canonical names of spec §1, into the
 local ``publish/`` folder:
 
@@ -12,6 +12,9 @@ local ``publish/`` folder:
 ``risk_diff.xlsx`` / ``monitor.xlsx`` are plain renamed copies, made by the PowerShell script from the source
 paths that ``build`` returns. ``check`` is the success definition of spec §2-5: all five present and
 ``社一覧.xlsx`` / ``monitor.xlsx`` written today; otherwise the sync folder keeps the previous week's files.
+
+``requests`` writes a 依頼社リスト (config/requests.toml shape, group = 依頼) from the listed filers of
+edinet_codes (``codes sync``), optionally narrowed by 証券コード range, 提出者業種 (Edinetcode.zip) and count.
 
 ``config`` also decides the weekly base date T (``publish.as_of``, default today in JST) and the doclist range
 (from the oldest not-final cached day, so a skipped week is caught up; ``doclist_range``).
@@ -193,6 +196,107 @@ def write_targets(path: Path, filers: list[dict], periods: list[dict]) -> Path:
 def load_filers(path: Path) -> list[dict]:
     with open(path, "rb") as f:
         return tomllib.load(f).get("filer", [])
+
+
+# ---------------------------------------------------------------- 依頼社リストの自動生成 (publish requests)
+def listed_filers(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
+    """[(edinet_code, 証券コード4桁, name)] of edinet_codes with listed = 1 and a 証券コード, in 証券コード order."""
+    try:
+        rows = conn.execute("SELECT edinet_code, sec_code5, name FROM edinet_codes "
+                            "WHERE listed = 1 AND sec_code5 IS NOT NULL AND sec_code5 != ''").fetchall()
+    except sqlite3.OperationalError:     # schema not created yet
+        rows = []
+    if not rows:
+        raise PublishError("edinet_codes に上場・証券コードありの会社がありません。先に `python -m edinet_risk codes "
+                           "sync` を実行してください")
+    out = [(code, sec5[:4].upper(), name or "") for code, sec5, name in rows]
+    return sorted(out, key=lambda r: (r[1], r[0]))
+
+
+def filer_sectors(codelist_zip: bytes) -> dict[str, str]:
+    """edinet_code -> 提出者業種 from Edinetcode.zip (the column is not stored in edinet_codes)."""
+    import io
+    import zipfile
+    from .population import edinet_codes as ec
+    zf = zipfile.ZipFile(io.BytesIO(codelist_zip))
+    name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
+    rows = ec._decode(zf.read(name), f"{ec.EDINETCODE_FILE}/{name}")
+    hi, col = ec._header_index(rows, ["EDINETコード", "提出者業種"], ec.EDINETCODE_FILE)
+    out = {}
+    for r in rows[hi + 1:]:
+        if len(r) > max(col.values()):
+            sector = ec._norm(r[col["提出者業種"]])
+            if sector:
+                out[ec._norm(r[col["EDINETコード"]])] = sector
+    return out
+
+
+def filers_with_filing(conn: sqlite3.Connection, period_end_from: date, period_end_to: date,
+                       doc_types, ordinances, forms) -> set[str]:
+    """EDINET codes with an original annual report (filing_filter [annual_report]) whose period ends in the window."""
+    q = lambda xs: ",".join("?" * len(xs))   # noqa: E731
+    doc_types, ordinances, forms = sorted(doc_types), sorted(ordinances), sorted(forms)
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT edinet_code FROM documents WHERE doc_type_code IN ({q(doc_types)}) "
+            f"AND ordinance_code IN ({q(ordinances)}) AND form_code IN ({q(forms)}) "
+            "AND coalesce(withdrawal_status, '0') = '0' AND period_end BETWEEN ? AND ?",
+            [*doc_types, *ordinances, *forms, period_end_from.isoformat(), period_end_to.isoformat()]).fetchall()
+    except sqlite3.OperationalError:
+        raise PublishError("documents テーブルがありません。--with-filing には書類一覧（`doclist sync`）が要ります") from None
+    return {r[0] for r in rows if r[0]}
+
+
+def select_requests(listed: list[tuple[str, str, str]], *, exclude: set[str] = frozenset(),
+                    sec_from: str | None = None, sec_to: str | None = None,
+                    sectors: dict[str, str] | None = None, sector_names: list[str] | None = None,
+                    with_filing: set[str] | None = None, limit: int | None = None) -> tuple[list[dict], dict]:
+    """依頼社リストの [[filer]]（group = 依頼）と件数の内訳。
+
+    Order of the filters: listed + 証券コード (``listed``) -> ``exclude`` (EDINET codes, e.g. the peers) ->
+    証券コード range (4 characters, upper case, both ends included) -> 提出者業種 (exact match) ->
+    ``with_filing`` (EDINET codes with a current annual report) -> 証券コード order -> ``limit``.
+    A label shared by 2+ selected filers gets the 証券コード appended (labels key the full-text diff HTML).
+    """
+    rows = [r for r in listed if r[0] not in exclude]
+    excluded = len(listed) - len(rows)
+    if sec_from:
+        rows = [r for r in rows if r[1] >= sec_from.strip().upper()]
+    if sec_to:
+        rows = [r for r in rows if r[1] <= sec_to.strip().upper()]
+    if sector_names:
+        sectors = sectors or {}
+        unknown = [s for s in sector_names if s not in set(sectors.values())]
+        if unknown:
+            raise PublishError(f"提出者業種 {', '.join(unknown)} はコードリストにありません。候補: "
+                               + "、".join(sorted(set(sectors.values()))))
+        rows = [r for r in rows if sectors.get(r[0]) in sector_names]
+    if with_filing is not None:
+        rows = [r for r in rows if r[0] in with_filing]
+    rows = sorted(rows, key=lambda r: (r[1], r[0]))
+    filtered = len(listed) - excluded - len(rows)
+    if limit is not None:
+        filtered += max(0, len(rows) - limit)
+        rows = rows[:limit]
+    names: dict[str, int] = {}
+    for _, _, name in rows:
+        names[name] = names.get(name, 0) + 1
+    filers = [{"secCode": sec, "edinetCode": code,
+               "label": f"{name}（{sec}）" if names[name] > 1 else (name or code), "group": REQUEST}
+              for code, sec, name in rows]
+    return filers, {"listed": len(listed), "excluded": excluded, "filtered": filtered, "selected": len(filers)}
+
+
+def write_requests(path: Path, filers: list[dict], conditions: str) -> Path:
+    """config/requests.toml の形（requests.example.toml）。実行日時は書かない（同じ入力なら同じファイル）。"""
+    lines = [f"# generated by `python -m edinet_risk publish requests` (条件: {conditions}、{len(filers)} 社)",
+             "# 手で直すと次の生成で上書きされる（--force のとき）。個別の社は別の targets ファイルに書く。", ""]
+    for f in filers:
+        lines += ["[[filer]]"] + [f"{k} = {_toml_str(v)}" for k, v in f.items()] + [""]
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
 
 
 # ---------------------------------------------------------------- locating the CLI outputs

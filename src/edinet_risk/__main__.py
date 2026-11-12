@@ -206,6 +206,25 @@ def main(argv=None) -> int:
     pt.add_argument("--out", type=Path, required=True, help="merged targets TOML to write")
     pt.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
     pt.add_argument("--db", type=Path, default=None, help="database for secCode lookup (overrides paths.db)")
+    pq = pus.add_parser("requests", help="write a 依頼社リスト (config/requests.toml shape, group = 依頼) from the "
+                                         "listed filers of edinet_codes (`codes sync`); offline")
+    pq.add_argument("--out", type=Path, required=True, help="TOML to write, e.g. config/requests.toml")
+    pq.add_argument("--force", action="store_true", help="overwrite --out if it exists")
+    pq.add_argument("--exclude", type=Path, nargs="+", default=None,
+                    help="targets files whose filers are left out (default: settings publish.targets except --out)")
+    pq.add_argument("--sec-from", default=None, help="証券コード 4 桁の下限（含む）")
+    pq.add_argument("--sec-to", default=None, help="証券コード 4 桁の上限（含む）")
+    pq.add_argument("--sector", nargs="+", default=None,
+                    help="提出者業種（完全一致、複数可）; read from <cache>/codes/Edinetcode.zip")
+    pq.add_argument("--limit", type=int, default=None, help="first N filers in 証券コード order (e.g. 100)")
+    pq.add_argument("--with-filing", action="store_true",
+                    help="only filers with an annual report (filing_filter [annual_report]) whose period ends in "
+                         "window.current")
+    pq.add_argument("--dry-run", action="store_true", help="print the counts and the first filers; write nothing")
+    pq.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
+    pq.add_argument("--db", type=Path, default=None, help="database (overrides paths.db; read only)")
+    pq.add_argument("--cache", type=Path, default=None, help="cache dir with codes/Edinetcode.zip "
+                                                              "(overrides paths.cache_dir)")
     pb = pus.add_parser("build", help="write 社一覧.xlsx, 社別/*.md, 週次要約.md into publish/ and print the "
                                       "sources of risk_diff.xlsx / monitor.xlsx as JSON")
     pb.add_argument("--out-root", type=Path, required=True, help="CLI output root (resolve_*/, m1/run_*/, monitor_*/)")
@@ -700,6 +719,63 @@ def _resolve(a) -> int:
     return 0
 
 
+def _publish_requests(a, s, db_path: Path) -> int:
+    """publish requests: 依頼社リストを edinet_codes から作る（PublishError / ConfigError は呼び出し側で終了コード 2）。"""
+    import sqlite3
+
+    from . import peer_publish as publish
+    from .population.edinet_codes import EDINETCODE_FILE
+    from .resolve.versions import FilingFilter
+    if a.out.exists() and not a.force and not a.dry_run:
+        raise publish.PublishError(f"{a.out} は既にあります（上書きするときは --force）")
+    if a.limit is not None and a.limit < 1:
+        raise publish.PublishError("--limit は 1 以上")
+    if not db_path.exists():
+        raise publish.PublishError(f"DB がありません: {db_path}（先に `python -m edinet_risk codes sync`）")
+    sectors = None
+    if a.sector:
+        zpath = Path(a.cache or s.paths.cache_dir) / "codes" / EDINETCODE_FILE
+        if not zpath.exists():
+            raise publish.PublishError(f"--sector には {zpath} が要ります（`codes sync` で作られる）")
+        sectors = publish.filer_sectors(zpath.read_bytes())
+    exclude_files = a.exclude if a.exclude is not None else [
+        Path(t) for t in s.publish.targets if Path(t).resolve() != a.out.resolve()]
+    conn = sqlite3.connect(f"file:{db_path.resolve().as_posix()}?mode=ro", uri=True)
+    try:
+        listed = publish.listed_filers(conn)
+        exclude = {f["edinetCode"] for f in publish.merge_targets(exclude_files, conn)[0]} if exclude_files else set()
+        with_filing = None
+        if a.with_filing:
+            ff = FilingFilter.from_toml(s.paths.filing_filter)
+            w = s.window.current
+            with_filing = publish.filers_with_filing(conn, w.period_end_from, w.period_end_to,
+                                                     ff.doc_types, ff.ordinances, ff.forms)
+    finally:
+        conn.close()
+    filers, n = publish.select_requests(listed, exclude=exclude, sec_from=a.sec_from, sec_to=a.sec_to,
+                                        sectors=sectors, sector_names=a.sector, with_filing=with_filing,
+                                        limit=a.limit)
+    cond = ["上場・証券コードあり", "除外: " + (", ".join(p.as_posix() for p in exclude_files) or "なし")]
+    if a.sec_from or a.sec_to:
+        cond.append(f"証券コード {a.sec_from or ''}〜{a.sec_to or ''}")
+    if a.sector:
+        cond.append("業種 " + "・".join(a.sector))
+    if a.with_filing:
+        w = s.window.current
+        cond.append(f"当期の有報あり（期末 {w.period_end_from}〜{w.period_end_to}）")
+    if a.limit is not None:
+        cond.append(f"先頭 {a.limit} 社")
+    if not filers:
+        raise publish.PublishError("条件に合う会社が 0 社です（" + "、".join(cond) + "）")
+    if not a.dry_run:
+        publish.write_requests(a.out, filers, "、".join(cond))
+    print(f"publish requests: {n['selected']} filer(s) -> {'(dry-run) ' if a.dry_run else ''}{a.out}"
+          f"（上場・証券コードあり {n['listed']} 社、除外 {n['excluded']} 社、条件で除いた {n['filtered']} 社）"
+          + "".join(f"\n  {f['secCode']} {f['edinetCode']} {f['label']}" for f in filers[:10])
+          + (f"\n  …ほか {len(filers) - 10} 社" if len(filers) > 10 else ""))
+    return 0
+
+
 def _publish(a) -> int:
     from . import peer_publish as publish
     from .config import ConfigError, api_key, load_settings
@@ -737,6 +813,8 @@ def _publish(a) -> int:
                               "cache_dir": s.paths.cache_dir, "settings": s.source, "api_key_source": key_source}))
             return 0
         path = a.db or s.paths.db_path
+        if a.publish_cmd == "requests":
+            return _publish_requests(a, s, Path(path))
         if a.publish_cmd == "targets":
             conn = db.connect(path) if Path(path).exists() else None
             try:
