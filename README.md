@@ -4,6 +4,8 @@
 
 ## セットアップ（Windows / PowerShell）
 
+Python 3.12 以上が要る（`pyproject.toml` の `requires-python = ">=3.12"`。3.11 以下では `pip install -e .` が失敗する）。`python --version` が 3.12 未満なら、`winget install -e --id Python.Python.3.12 --scope user` で入れ、venv は 3.12 を明示して作る（`py -3.12 -m venv .venv`、または `py -0p` で表示される 3.12 の python.exe のフルパスで `-m venv .venv`）。社内プロキシで pip が `CERTIFICATE_VERIFY_FAILED` になるときは [`docs/admin-runbook.md`](docs/admin-runbook.md) §1。
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate

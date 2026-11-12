@@ -7,6 +7,14 @@
 ## 1. 一度だけ（セットアップ）
 
 1. 社内の管理用 Windows に Python 3.12+ と本リポ（`minimo162/edinet-risk`）を置く（例: `C:\edinet-risk`）。
+   - Python のバージョンを先に確かめる: `python --version`。**3.12 未満（例: 3.11）だと `pip install -e .` が失敗する**（`pyproject.toml` が `requires-python = ">=3.12"`）。3.12 が無ければユーザー単位で入れる:
+     ```powershell
+     winget install -e --id Python.Python.3.12 --scope user
+     ```
+     インストール後も `python` が古い版を指すことがあるので、venv は **3.12 を明示して** 作る（下の `python -m venv .venv` の代わりに、どちらか）:
+     - `py -3.12 -m venv .venv`（Python Launcher があるとき）
+     - フルパス: `& "<3.12 の python.exe のフルパス>" -m venv .venv`。場所は `py -0p` で表示される 3.12 の行で確かめる（ユーザー単位の標準の場所は `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`。社内 PC の実際の場所は確かめてから使う）
+     作った後に `.venv\Scripts\python --version` が 3.12 であることを確認する。
    ```powershell
    cd C:\edinet-risk
    python -m venv .venv
