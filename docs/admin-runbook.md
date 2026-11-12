@@ -107,19 +107,25 @@ GUI（タスクスケジューラ →「タスクの作成」）:
 |---|---|
 | 全般 | 名前 `edinet-risk publish_peer`、実行ユーザー = §2 のキーを設定したユーザー、「ユーザーがログオンしているときのみ実行する」 |
 | トリガー | 毎週・月曜・7:30 |
-| 操作 | プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1"`（同期フォルダなしは末尾に ` -NoSync`）、開始 `C:\edinet-risk` |
+| 操作 | プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1"`（同期フォルダなしは末尾に ` -NoSync`）、開始 `C:\edinet-risk`。同期フォルダなし（当面の社内運用）の引数は `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1" -NoSync`。`C:\edinet-risk` は例なので、「引数」と「開始」の両方をリポジトリを置いた場所に合わせる |
 | 設定 | **「スケジュールされた時刻にタスクを開始できなかった場合、すぐにタスクを実行する」にチェック**（StartWhenAvailable。PC が止まっていた週も、次にログオンしたときに実行される）、「タスクを停止するまでの時間」= 4時間、「既に実行中の場合」= 新しいインスタンスを開始しない |
 
-コマンドで登録する場合（キーは引数に入れない。`schtasks` では StartWhenAvailable を付けられないので PowerShell で登録する）:
+コマンドで登録する場合（キーは引数に入れない。`schtasks` では StartWhenAvailable を付けられないので PowerShell で登録する）。`$repo` はリポジトリを置いた場所に合わせる（`C:\edinet-risk` は例）。`-File` の値は引用符で囲む（パスに空白があっても動く）:
 
 ```powershell
-$act = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory "C:\edinet-risk" `
-  -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\edinet-risk\scripts\publish_peer.ps1"   # 同期フォルダなしは末尾に -NoSync を足す
+$repo = "C:\edinet-risk"   # リポジトリを置いた場所（例）。タスクの「引数」と「開始」の両方に使う
+# 同期フォルダなし（手動アップロード運用。当面の社内運用はこちら）
+$arg = "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\publish_peer.ps1`" -NoSync"
+# 同期フォルダあり（dest_dir を設定した場合）は -NoSync を付けない:
+# $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\publish_peer.ps1`""
+$act = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory $repo -Argument $arg
 $trg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:30
 $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "edinet-risk publish_peer" -Action $act -Trigger $trg -Settings $set -Force   # 実行中のユーザー・ログオン時のみ
 Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1回試す
 ```
+
+登録後、タスクの「操作」タブで、引数の末尾に `-NoSync` があること（手動アップロード運用のとき）と、「開始（オプション）」がリポジトリの場所になっていることを確かめる。
 
 ### 休んだ週の取りこぼし（リスクと対処）
 
