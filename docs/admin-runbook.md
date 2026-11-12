@@ -7,11 +7,20 @@
 ## 1. 一度だけ（セットアップ）
 
 1. 社内の管理用 Windows に Python 3.12+ と本リポ（`minimo162/edinet-risk`）を置く（例: `C:\edinet-risk`）。
+   - Python のバージョンを先に確かめる: `python --version`。**3.12 未満（例: 3.11）だと `pip install -e .` が失敗する**（`pyproject.toml` が `requires-python = ">=3.12"`）。3.12 が無ければユーザー単位で入れる:
+     ```powershell
+     winget install -e --id Python.Python.3.12 --scope user
+     ```
+     インストール後も `python` が古い版を指すことがあるので、venv は **3.12 を明示して** 作る（下の `python -m venv .venv` の代わりに、どちらか）:
+     - `py -3.12 -m venv .venv`（Python Launcher があるとき）
+     - フルパス: `& "<3.12 の python.exe のフルパス>" -m venv .venv`。場所は `py -0p` で表示される 3.12 の行で確かめる（ユーザー単位の標準の場所は `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`。社内 PC の実際の場所は確かめてから使う）
+     作った後に `.venv\Scripts\python --version` が 3.12 であることを確認する。
    ```powershell
    cd C:\edinet-risk
    python -m venv .venv
    .venv\Scripts\pip install -e .
    ```
+   `pip install` が `CERTIFICATE_VERIFY_FAILED` で失敗したら、§1 の末尾「社内プロキシで pip が証明書エラーになるとき」。
 2. `config\settings.example.toml` を `config\settings.toml` にコピーし、`[publish]` を埋める:
    - `dest_dir` … SharePoint の同期フォルダ（OneDrive クライアントで同期した公開フォルダのローカルパス。例: `C:\Users\<user>\<社名>\EDINETリスク - 公開`）。**必須**: 空のまま（または `settings.toml` がないまま）本実行すると、何もせず終了コード 1 で止まる。`publish\` を作るだけなら `-NoSync` を付ける。
    - **同期フォルダを使えない環境（当面の社内運用）**: `dest_dir` は空のままにし、実行には常に `-NoSync` を付ける。`publish\` の中身は管理者が SharePoint へ手動でアップロードする（§12）。
@@ -31,6 +40,30 @@
 8. タスクスケジューラに登録する（§5）。
 9. `docs/copilot-runbook.md` の統合プロンプトのプレースホルダを実リンクに差し替え、共有 Teams チャネルに **ピン留め**。古い文面は残さない。
 
+### 社内プロキシで pip が証明書エラーになるとき
+
+症状: `pip install -e .` が `CERTIFICATE_VERIFY_FAILED` で失敗する（社内プロキシの SSL 検査。pip は Windows の証明書ストアではなく自前の証明書束を使うため）。
+
+解決できた方法: Windows の証明書ストア（ROOT と CA）を Python の標準ライブラリ（`ssl.enum_certificates`）で PEM ファイルに書き出し、pip にその PEM を指定する。
+
+1. 次の内容を **リポジトリの外** に `export_ca.py` として保存し、`<PEM のパス>` を書き出し先（リポジトリの外。例: ユーザーのフォルダの下）に変えて、`python export_ca.py` で実行する。
+   ```python
+   import ssl
+   seen, pems = set(), []
+   for store in ("ROOT", "CA"):
+       for der, enc, trust in ssl.enum_certificates(store):
+           if enc == "x509_asn" and der not in seen:
+               seen.add(der)
+               pems.append(ssl.DER_cert_to_PEM_cert(der))
+   open(r"<PEM のパス>", "w", encoding="ascii", newline="\n").write("".join(pems))
+   ```
+2. pip に指定する: `.venv\Scripts\python -m pip config set global.cert "<PEM のパス>"`。そのあと `.venv\Scripts\pip install -e .` をやり直す。
+
+- この例は、社外の開発環境（Python 3.13）で書き出しと `ssl.create_default_context(cafile=…)` での読み込みを確認した。社内 PC の Python 3.12 での実行結果は、このリポジトリでは未確認。
+- うまくいかなかった方法: `PIP_USE_FEATURE=truststore` の設定（社内 PC では解決しなかった）、PowerShell で PEM を書き出す方法（記述の誤りで壊れた PEM ができた）。
+- PEM・pip の設定ファイルはリポジトリに入れない。証明書の検証を切る設定（`--trusted-host` など）は使わない。
+- EDINET API への通信はこの設定と無関係。`edinet_risk` の通信（`net/http.py`）は、`truststore` が入っていればそれを、無ければ `ssl.create_default_context()` を使い、Windows では OS の証明書ストアを読む。社内プロキシのルート証明書が Windows のストアに入っていれば、追加の設定なしで通る（社内 PC で SSL エラーなしに通っていることと整合する）。証明書の検証を切っている箇所は無い。
+
 ## 2. API キー（2通りだけ）
 
 キーは次のどちらかにだけ置く。`settings.toml`（`api_key` の行はエラーで拒否される）・`publish_peer.ps1`・タスクの引数・公開フォルダ・プロンプト・Teams・Git には書かない。
@@ -48,6 +81,31 @@
 1. `config\requests.example.toml` を `config\requests.toml` にコピーし、`[[filer]]` を足す（`secCode`（証券コード4桁）か `edinetCode` のどちらか。`label` は社別 md の名前になる）。`社一覧.xlsx` の「区分」は、`targets` の1つ目（transport7）の社が `ピア`、2つ目以降（依頼社リスト）の社が `依頼`。個別に変えるときは `[[filer]]` に `group = "ピア"` か `group = "依頼"` を書く。Copilot は「対象:」が空欄なら区分=ピアの社だけを使う。
 2. `settings.toml` の `[publish]` を `targets = ["config/transport7.toml", "config/requests.toml"]` にする。
 3. `-DryRun` で確認し、次回の定期実行を待つか手動で実行する。`secCode` が見つからないときは `codes sync` を流し直す。
+
+### 依頼社リストを自動で作る（`publish requests`）
+
+手で書く代わりに、`codes sync` で DB（`edinet_codes`）に入った上場会社（上場区分が上場・証券コードあり）から `config\requests.toml` を作れる。全社が `group = "依頼"` になり、`settings.toml` の `publish.targets` にある社（transport7 のピア）は除かれる。ネットワークは使わない（DB は読み取りだけ）。
+
+```powershell
+.venv\Scripts\python -m edinet_risk publish requests --out config\requests.toml --limit 100 --dry-run   # 件数と先頭の社を見るだけ
+.venv\Scripts\python -m edinet_risk publish requests --out config\requests.toml --limit 100             # 書き出す
+```
+
+| オプション | 意味 |
+|---|---|
+| `--out <toml>`（必須） | 出力先。既にあるときは上書きせず終了コード 2（上書きは `--force`） |
+| `--limit N` | 証券コード順の先頭 N 社（まず 100 社で試す） |
+| `--sec-from XXXX` `--sec-to XXXX` | 証券コード 4 桁の範囲（両端を含む。英字入りのコードは大文字の文字列として比べる） |
+| `--sector <業種>…` | 提出者業種の完全一致（複数可）。`cache\codes\Edinetcode.zip`（`codes sync` が保存）から読む。ない業種名を書くと候補の一覧を出して終了コード 2 |
+| `--with-filing` | 当期の窓（`[window.current]` の期末の範囲）に対象の有報（`config\filing_filter.toml` の `[annual_report]`）が DB にある社だけにする。様式の違う会社（投資法人など）や当期の有報がない会社を入れると、`社一覧.xlsx` に「当期書類なし」の行が出て、monitor の突合率が閾値を下回りやすい |
+| `--exclude <toml>…` | 除く社のリスト（既定: `publish.targets` のうち `--out` 以外） |
+| `--dry-run` | 書かずに件数と先頭の社を表示 |
+
+- 絞り込みの順: 上場・証券コードあり → 除外 → 証券コード範囲 → 業種 → `--with-filing` → 証券コード順 → `--limit`。
+- 同じ提出者名の会社が 2 社以上あるときは、その社だけ `label` を「提出者名（証券コード）」にする（社別 md の名前や全文差分 HTML の取り違えを防ぐ）。
+- 生成したファイルには実行日時を書かない（同じ DB・同じ条件なら同じファイル）。条件は 1 行目のコメントに出る。
+- 手順: 生成 → `settings.toml` の `targets` に `"config/requests.toml"` を足す（上の 2.）→ `-DryRun` → 本実行。会社を増やすと取得時間・`cache` の容量・公開する社別 md の数が増える。
+- `config\requests.toml` はローカルのファイル。リポジトリにコミットしない。
 
 ## 4. 手動実行・DryRun
 
@@ -82,19 +140,25 @@ GUI（タスクスケジューラ →「タスクの作成」）:
 |---|---|
 | 全般 | 名前 `edinet-risk publish_peer`、実行ユーザー = §2 のキーを設定したユーザー、「ユーザーがログオンしているときのみ実行する」 |
 | トリガー | 毎週・月曜・7:30 |
-| 操作 | プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1"`（同期フォルダなしは末尾に ` -NoSync`）、開始 `C:\edinet-risk` |
+| 操作 | プログラム `powershell.exe`、引数 `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1"`（同期フォルダなしは末尾に ` -NoSync`）、開始 `C:\edinet-risk`。同期フォルダなし（当面の社内運用）の引数は `-NoProfile -ExecutionPolicy Bypass -File "C:\edinet-risk\scripts\publish_peer.ps1" -NoSync`。`C:\edinet-risk` は例なので、「引数」と「開始」の両方をリポジトリを置いた場所に合わせる |
 | 設定 | **「スケジュールされた時刻にタスクを開始できなかった場合、すぐにタスクを実行する」にチェック**（StartWhenAvailable。PC が止まっていた週も、次にログオンしたときに実行される）、「タスクを停止するまでの時間」= 4時間、「既に実行中の場合」= 新しいインスタンスを開始しない |
 
-コマンドで登録する場合（キーは引数に入れない。`schtasks` では StartWhenAvailable を付けられないので PowerShell で登録する）:
+コマンドで登録する場合（キーは引数に入れない。`schtasks` では StartWhenAvailable を付けられないので PowerShell で登録する）。`$repo` はリポジトリを置いた場所に合わせる（`C:\edinet-risk` は例）。`-File` の値は引用符で囲む（パスに空白があっても動く）:
 
 ```powershell
-$act = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory "C:\edinet-risk" `
-  -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\edinet-risk\scripts\publish_peer.ps1"   # 同期フォルダなしは末尾に -NoSync を足す
+$repo = "C:\edinet-risk"   # リポジトリを置いた場所（例）。タスクの「引数」と「開始」の両方に使う
+# 同期フォルダなし（手動アップロード運用。当面の社内運用はこちら）
+$arg = "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\publish_peer.ps1`" -NoSync"
+# 同期フォルダあり（dest_dir を設定した場合）は -NoSync を付けない:
+# $arg = "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\publish_peer.ps1`""
+$act = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory $repo -Argument $arg
 $trg = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:30
 $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "edinet-risk publish_peer" -Action $act -Trigger $trg -Settings $set -Force   # 実行中のユーザー・ログオン時のみ
 Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1回試す
 ```
+
+登録後、タスクの「操作」タブで、引数の末尾に `-NoSync` があること（手動アップロード運用のとき）と、「開始（オプション）」がリポジトリの場所になっていることを確かめる。
 
 ### 休んだ週の取りこぼし（リスクと対処）
 
@@ -128,6 +192,7 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 
 | 症状 | 見ること | 対処 |
 |---|---|---|
+| `pip install` が `CERTIFICATE_VERIFY_FAILED` | 社内プロキシの SSL 検査 | §1「社内プロキシで pip が証明書エラーになるとき」（Windows の証明書ストアを PEM に書き出して `pip config set global.cert`） |
 | 「API キーがありません」 | §2 の環境変数／`api_key_file` | 実行ユーザーの環境変数を確認、タスクスケジューラを開き直す。Git に載せない |
 | fetch／doclist が終了コード 4 | キーの有効性（401/403） | キーを再発行して差し替え |
 | 「doclist が終了コード 2 で失敗」 | ログの `failed <日付>` / `not fetched=` | 一時障害なら時間をおいて再実行（取得済みの日はキャッシュから読むので速い） |
@@ -162,18 +227,23 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 - 利用者プロンプト（Excel 体裁固定）: `docs/copilot-runbook.md` / `docs/templates/yoY_report_template.xlsx`
 - 全体像: `docs/overview.md`
 
-## 11. 確認状況（2026-10-29 時点）
+## 11. 確認状況（2026-11-12 時点）
 
-済み（社外の開発環境、ネットワークなし `--offline`、DB はコピーを使用）:
+済み（社内の管理用 Windows。依頼書に記載された結果）:
+- Windows PowerShell 5.1 で `publish_peer.ps1` を実行して成功（2026-11-12。手動実行とタスクスケジューラ経由の両方）。ps1 が社内の PowerShell 5.1 で動いたのはこれが初めて。
+- 同期フォルダなしの運用（`dest_dir` 空、`-NoSync`）で通った。
+- 本番キーでの `doclist sync`／`fetch`: 書類 16 件を取得し失敗 0 件。照合は全文一致 14/14、`publish check` は ok（5 files）。
+- タスクスケジューラ「edinet-risk publish_peer」（毎週月曜 7:30、`-NoSync` 付き、実行時間の上限 4 時間）の登録と試行（`LastTaskResult` = 0）。
+- 初回の SharePoint への手動アップロード（§12）。公開フォルダ名は「EDINETリスク - 公開」。
+
+済み（社外の開発環境、ネットワークなし `--offline`、DB はコピーを使用。2026-10-29）:
 - ps1 と同じ順・同じ引数で CLI を実行（`publish targets` → `resolve` → `fetch --dry-run` → `extract` → `resolve` → `compare` → `report` → `monitor` → `publish build` → リネームコピー → `publish check`）。輸送7社で `publish check` が ok、`publish\templates\yoY_report_template.xlsx`（`差分詳細`・`分析` シート込み）のコピーを確認。
 - ps1 の静的テスト（`tests/test_peer_publish.py`）: UTF-8 BOM・PowerShell 5.1 で使えない構文なし・各サブコマンドに渡すオプション（`--config` を含む）が CLI に実在・ps1 が読む JSON キーが `publish config`／`publish build` の出力に実在。
 
-未（この環境ではできないため実施していない）:
-- [ ] 社内の管理用 Windows・PowerShell 5.1 での `publish_peer.ps1` の実行（`-DryRun` を含め、ps1 そのものはまだ一度も実行していない）
-- [ ] タスクスケジューラ登録と定期実行（§5）
-- [ ] SharePoint の実 URL の確定と、手動アップロード（§12、`-NoSync`）での公開。「置き換え」後も統合プロンプトの同じリンクで新しいファイルが読めるか（同期フォルダ（`dest_dir`）へのコピーは、同期できる環境になったときに確認）
-- [ ] 統合プロンプトのリンクを実 URL に差し替えて M365 Copilot 実機で読めるかの確認（`copilot-runbook.md`「パイロット第1確認」）
-- [ ] 本番キーでの `doclist sync`／`fetch`（週次差分の取得）
+未:
+- [ ] タスクスケジューラの定期起動（月曜 7:30 の自動起動）での実行。登録と試行は済み（上）
+- [ ] 2週目以降の「置き換え」アップロード後も、統合プロンプトの同じリンクで新しいファイルが読めるか（同期フォルダ（`dest_dir`）へのコピーは、同期できる環境になったときに確認）
+- [ ] M365 Copilot 実機で読めるか（`copilot-runbook.md`「パイロット第1確認」）。統合プロンプトの実行で成果物（6シートの xlsx）は作られたが、内容に不具合があった（要約の誤り、注記の混入、要確認の重複など）。プロンプトを修正中で、再実行の結果は未確認。配布版では見本ブックのリンクが未差し替えだった
 
 ## 12. 手動アップロード（同期フォルダなし）
 

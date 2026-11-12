@@ -5,6 +5,7 @@
 # secCode だけのときは DB の edinet_codes（`codes sync` 済み）で EDINETコードと社名を引く。
 # label（社名）は省略可（省略時は EDINET の提出者名）。社別 md のファイル名に使う。
 # transport7 と重なる社は先に書いた方（transport7）が使われる。
+# 上場会社から自動で作るときは `python -m edinet_risk publish requests --out config/requests.toml`（admin-runbook §3）。
 
 # [[filer]]
 # secCode = "7272"

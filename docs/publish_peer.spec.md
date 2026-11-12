@@ -1,6 +1,6 @@
 # publish_peer 仕様（リネーム表）
 
-`scripts/publish_peer.ps1`（管理用 Windows・週次）の仕様。スクリプト本体は実装済み（社内 Windows での実機確認は未。確認状況は `admin-runbook.md` §11）。本書の §1 が公開ファイルの正規名の唯一の定義で、`overview.md`・`easiest-path.md`・`copilot-runbook.md`・`copilot-architecture.md` はここを参照する。
+`scripts/publish_peer.ps1`（管理用 Windows・週次）の仕様。スクリプト本体は実装済み（社内 Windows・PowerShell 5.1 での実行は 2026-11-12 に確認済み（`-NoSync` 運用）。確認状況は `admin-runbook.md` §11）。本書の §1 が公開ファイルの正規名の唯一の定義で、`overview.md`・`easiest-path.md`・`copilot-runbook.md`・`copilot-architecture.md` はここを参照する。
 
 ## 方針
 - CLI（`python -m edinet_risk`）の出力名は変えない。CLI は run ごとのフォルダに run 固有の名前で出す（例: `risk_diff_transport7.xlsx`、`monitor_<run-id>/monitor.xlsx`）。
