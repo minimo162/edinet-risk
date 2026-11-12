@@ -12,6 +12,7 @@
    python -m venv .venv
    .venv\Scripts\pip install -e .
    ```
+   `pip install` が `CERTIFICATE_VERIFY_FAILED` で失敗したら、§1 の末尾「社内プロキシで pip が証明書エラーになるとき」。
 2. `config\settings.example.toml` を `config\settings.toml` にコピーし、`[publish]` を埋める:
    - `dest_dir` … SharePoint の同期フォルダ（OneDrive クライアントで同期した公開フォルダのローカルパス。例: `C:\Users\<user>\<社名>\EDINETリスク - 公開`）。**必須**: 空のまま（または `settings.toml` がないまま）本実行すると、何もせず終了コード 1 で止まる。`publish\` を作るだけなら `-NoSync` を付ける。
    - **同期フォルダを使えない環境（当面の社内運用）**: `dest_dir` は空のままにし、実行には常に `-NoSync` を付ける。`publish\` の中身は管理者が SharePoint へ手動でアップロードする（§12）。
@@ -30,6 +31,30 @@
 7. `-DryRun`（§4）で、実行するコマンドとコピー先を確認する。続けて手動で1回本実行し、§6 の確認をする（同期フォルダなしなら `-NoSync` で実行し、§12 の手順で初回アップロードする）。
 8. タスクスケジューラに登録する（§5）。
 9. `docs/copilot-runbook.md` の統合プロンプトのプレースホルダを実リンクに差し替え、共有 Teams チャネルに **ピン留め**。古い文面は残さない。
+
+### 社内プロキシで pip が証明書エラーになるとき
+
+症状: `pip install -e .` が `CERTIFICATE_VERIFY_FAILED` で失敗する（社内プロキシの SSL 検査。pip は Windows の証明書ストアではなく自前の証明書束を使うため）。
+
+解決できた方法: Windows の証明書ストア（ROOT と CA）を Python の標準ライブラリ（`ssl.enum_certificates`）で PEM ファイルに書き出し、pip にその PEM を指定する。
+
+1. 次の内容を **リポジトリの外** に `export_ca.py` として保存し、`<PEM のパス>` を書き出し先（リポジトリの外。例: ユーザーのフォルダの下）に変えて、`python export_ca.py` で実行する。
+   ```python
+   import ssl
+   seen, pems = set(), []
+   for store in ("ROOT", "CA"):
+       for der, enc, trust in ssl.enum_certificates(store):
+           if enc == "x509_asn" and der not in seen:
+               seen.add(der)
+               pems.append(ssl.DER_cert_to_PEM_cert(der))
+   open(r"<PEM のパス>", "w", encoding="ascii", newline="\n").write("".join(pems))
+   ```
+2. pip に指定する: `.venv\Scripts\python -m pip config set global.cert "<PEM のパス>"`。そのあと `.venv\Scripts\pip install -e .` をやり直す。
+
+- この例は、社外の開発環境（Python 3.13）で書き出しと `ssl.create_default_context(cafile=…)` での読み込みを確認した。社内 PC の Python 3.12 での実行結果は、このリポジトリでは未確認。
+- うまくいかなかった方法: `PIP_USE_FEATURE=truststore` の設定（社内 PC では解決しなかった）、PowerShell で PEM を書き出す方法（記述の誤りで壊れた PEM ができた）。
+- PEM・pip の設定ファイルはリポジトリに入れない。証明書の検証を切る設定（`--trusted-host` など）は使わない。
+- EDINET API への通信はこの設定と無関係。`edinet_risk` の通信（`net/http.py`）は、`truststore` が入っていればそれを、無ければ `ssl.create_default_context()` を使い、Windows では OS の証明書ストアを読む。社内プロキシのルート証明書が Windows のストアに入っていれば、追加の設定なしで通る（社内 PC で SSL エラーなしに通っていることと整合する）。証明書の検証を切っている箇所は無い。
 
 ## 2. API キー（2通りだけ）
 
@@ -159,6 +184,7 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 
 | 症状 | 見ること | 対処 |
 |---|---|---|
+| `pip install` が `CERTIFICATE_VERIFY_FAILED` | 社内プロキシの SSL 検査 | §1「社内プロキシで pip が証明書エラーになるとき」（Windows の証明書ストアを PEM に書き出して `pip config set global.cert`） |
 | 「API キーがありません」 | §2 の環境変数／`api_key_file` | 実行ユーザーの環境変数を確認、タスクスケジューラを開き直す。Git に載せない |
 | fetch／doclist が終了コード 4 | キーの有効性（401/403） | キーを再発行して差し替え |
 | 「doclist が終了コード 2 で失敗」 | ログの `failed <日付>` / `not fetched=` | 一時障害なら時間をおいて再実行（取得済みの日はキャッシュから読むので速い） |
