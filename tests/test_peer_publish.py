@@ -666,7 +666,8 @@ def _peers(tmp: Path) -> Path:
 
 def test_requests_lists_listed_filers_without_peers(tmp_path, capsys):
     db, peers, out = _codes_db(tmp_path / "c.sqlite"), _peers(tmp_path), tmp_path / "requests.toml"
-    assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers)]) == 0
+    assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers),
+                 "--include-no-filing"]) == 0
     msg = capsys.readouterr().out
     assert "publish requests: 4 filer(s)" in msg and "上場・証券コードあり 6 社、除外 2 社、条件で除いた 0 社" in msg
     got = pp.load_filers(out)
@@ -690,11 +691,11 @@ def test_requests_range_limit_and_with_filing(tmp_path, capsys):
     db, peers = _codes_db(tmp_path / "c.sqlite"), _peers(tmp_path)
     out = tmp_path / "r1.toml"
     assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers),
-                 "--sec-from", "1376", "--sec-to", "4001"]) == 0
+                 "--sec-from", "1376", "--sec-to", "4001", "--include-no-filing"]) == 0
     assert [f["secCode"] for f in pp.load_filers(out)] == ["1376", "4001"]      # both ends included; "130A" < "1376"
     out = tmp_path / "r2.toml"
     assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers),
-                 "--limit", "2"]) == 0
+                 "--limit", "2", "--include-no-filing"]) == 0
     assert [f["secCode"] for f in pp.load_filers(out)] == ["130A", "1376"]
     assert "条件で除いた 2 社" in capsys.readouterr().out
     out = tmp_path / "r3.toml"
@@ -703,6 +704,43 @@ def test_requests_range_limit_and_with_filing(tmp_path, capsys):
     got = pp.load_filers(out)
     assert [f["edinetCode"] for f in got] == ["E00004", "E90001"]
     assert got[1]["label"] == "株式会社アルファ"                     # only one アルファ selected -> no 証券コード
+    out4 = tmp_path / "r4.toml"                                     # --with-filing is the default now (Q-4)
+    assert main(["publish", "requests", "--out", str(out4), "--db", str(db), "--exclude", str(peers)]) == 0
+    assert out4.read_text(encoding="utf-8") == out.read_text(encoding="utf-8")
+
+
+def test_requests_default_leaves_out_filers_without_current_filing(tmp_path, capsys):
+    """Q-4: by default only filers with a current annual report; --include-no-filing keeps the others."""
+    db, peers = _codes_db(tmp_path / "c.sqlite"), _peers(tmp_path)
+    out = tmp_path / "d.toml"
+    assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers)]) == 0
+    msg = capsys.readouterr().out
+    assert "publish requests: 2 filer(s)" in msg and "条件で除いた 2 社" in msg
+    # E99001: period end after the window; E90002: other form / withdrawn only
+    assert [f["edinetCode"] for f in pp.load_filers(out)] == ["E00004", "E90001"]
+    assert "当期の有報あり（期末 2025-04-01〜2026-03-31）" in out.read_text(encoding="utf-8").splitlines()[0]
+    out = tmp_path / "all.toml"
+    assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers),
+                 "--include-no-filing"]) == 0
+    assert [f["edinetCode"] for f in pp.load_filers(out)] == ["E99001", "E00004", "E90001", "E90002"]
+    assert "当期の有報あり" not in out.read_text(encoding="utf-8").splitlines()[0]
+    with pytest.raises(SystemExit):                                 # contradictory options
+        main(["publish", "requests", "--out", str(tmp_path / "x.toml"), "--db", str(db), "--exclude", str(peers),
+              "--with-filing", "--include-no-filing"])
+    assert not (tmp_path / "x.toml").exists()
+    # no documents table (no `doclist sync` yet): the default needs it, --include-no-filing does not
+    nodoc = tmp_path / "nodoc.sqlite"
+    conn = sqlite3.connect(nodoc)
+    conn.execute("CREATE TABLE edinet_codes (edinet_code TEXT PRIMARY KEY, sec_code5 TEXT, name TEXT, listed INTEGER, "
+                 "fetched_at TEXT)")
+    conn.execute("INSERT INTO edinet_codes VALUES ('E00004', '13760', 'カネコ種苗株式会社', 1, NULL)")
+    conn.commit()
+    conn.close()
+    assert main(["publish", "requests", "--out", str(tmp_path / "y.toml"), "--db", str(nodoc),
+                 "--exclude", str(peers)]) == 2
+    assert not (tmp_path / "y.toml").exists()
+    assert main(["publish", "requests", "--out", str(tmp_path / "y.toml"), "--db", str(nodoc),
+                 "--exclude", str(peers), "--include-no-filing"]) == 0
 
 
 def test_requests_sector_from_codelist_zip(tmp_path, capsys):
@@ -714,7 +752,7 @@ def test_requests_sector_from_codelist_zip(tmp_path, capsys):
     assert sectors["E00004"] == "水産・農林業" and sectors["E99001"] == "情報・通信業"
     out = tmp_path / "r.toml"
     assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(_peers(tmp_path)),
-                 "--cache", str(cache), "--sector", "水産・農林業", "情報・通信業"]) == 0
+                 "--cache", str(cache), "--sector", "水産・農林業", "情報・通信業", "--include-no-filing"]) == 0
     assert [f["edinetCode"] for f in pp.load_filers(out)] == ["E99001", "E00004"]
     assert main(["publish", "requests", "--out", str(tmp_path / "x.toml"), "--db", str(db), "--cache", str(cache),
                  "--exclude", str(_peers(tmp_path)), "--sector", "存在しない業種"]) == 2
@@ -735,7 +773,7 @@ def test_requests_does_not_overwrite_and_needs_codes(tmp_path, capsys):
     assert "(dry-run)" in capsys.readouterr().out
     assert main(["publish", "requests", "--out", str(out), "--db", str(db), "--exclude", str(peers),
                  "--force"]) == 0
-    assert len(pp.load_filers(out)) == 4
+    assert len(pp.load_filers(out)) == 2                                         # default: current filing only
     empty = tmp_path / "empty.sqlite"
     sqlite3.connect(empty).close()
     n = tmp_path / "n.toml"
@@ -750,8 +788,10 @@ def test_requests_default_exclude_is_publish_targets(tmp_path, capsys, monkeypat
     db = _codes_db(tmp_path / "c.sqlite")
     _peers(tmp_path)
     s = tmp_path / "settings.toml"
-    s.write_text('[publish]\ntargets = ["peers.toml", "requests.toml"]\n', encoding="utf-8")
+    ff = (ROOT / "config" / "filing_filter.toml").as_posix()          # the default filter reads it (Q-4)
+    s.write_text(f'[paths]\nfiling_filter = "{ff}"\n\n[publish]\ntargets = ["peers.toml", "requests.toml"]\n',
+                 encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     assert main(["publish", "requests", "--out", "requests.toml", "--db", str(db), "--config", str(s)]) == 0
     got = pp.load_filers(tmp_path / "requests.toml")
-    assert len(got) == 4 and not {"E02144", "E02142"} & {f["edinetCode"] for f in got}
+    assert len(got) == 2 and not {"E02144", "E02142"} & {f["edinetCode"] for f in got}   # default: current filing
