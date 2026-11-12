@@ -38,15 +38,14 @@ SUMMARY_HEADER = ("会社", "シート", "当期docID", "当期の版", "前期d
                   "うちLLM対象", "全文差分HTML", "備考")
 HEAD_FILL = PatternFill("solid", fgColor="FFDDEBF7")
 
-# Placeholder wording (plan D8: final text at the end of M1; review §5-6 example, PDL1.0 / [規約] 1.1).
+# Source notice shown in all outputs (review §5-6 example, PDL1.0 / [規約] 1.1). Wording confirmed by the user 2026-11-12 (Q-1).
 SOURCE_NOTICE = (
     ("出典", "EDINET閲覧（提出）サイト（https://disclosure2.edinet-fsa.go.jp/）。金融庁 EDINET API v2 により取得した"
              "有価証券報告書の「事業等のリスク」（jpcrp_cor:BusinessRisksTextBlock）"),
     ("利用条件", "公共データ利用規約（第1.0版）（PDL1.0）に基づき利用"),
     ("加工した旨", "本資料は上記データを加工して作成したもの（本文の抽出・項目分割・前年との対応付け・文字単位の差分の"
                 "色付け）。表記の正規化は比較時のみに行い、本文は原文のまま表示している"),
-    ("加工者", "（仮）作成部署名をここに記載する"),
-    ("注意", "文言は計画 D8 の仮置き（M1の終わりに確定）。自動処理の結果であり、正確性は手作業の照合で確認すること"),
+    ("注意", "自動処理の結果であり、正確性は手作業の照合で確認すること"),
 )
 
 
