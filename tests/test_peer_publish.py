@@ -175,6 +175,10 @@ def test_build_writes_the_three_generated_files(tmp_path):
     assert "| 130A | 前期なし工業 | 前期なし: new_listing; フラグ: irregular; 比較なし:" in wk
     assert "### 監視レポート（run_id=monitor-new）" in wk                # monitor.md, headings demoted
     assert "### 照合（run_id=" + RUN in wk                                  # reconcile.md
+    # build saves 社一覧.xlsx at the wall-clock time; check compares mtimes with the TODAY passed in, so pin the
+    # mtime to TODAY (noon JST) to keep this test independent of the date it runs on.
+    t = datetime(TODAY.year, TODAY.month, TODAY.day, 12, 0, tzinfo=JST).timestamp()
+    os.utime(pub / "社一覧.xlsx", (t, t))
     assert pp.check(pub, TODAY) == ["missing: risk_diff.xlsx", "missing: monitor.xlsx"]
 
 
