@@ -187,18 +187,23 @@ Start-ScheduledTask -TaskName "edinet-risk publish_peer"     # 登録直後に1�
 - 利用者プロンプト（Excel 体裁固定）: `docs/copilot-runbook.md` / `docs/templates/yoY_report_template.xlsx`
 - 全体像: `docs/overview.md`
 
-## 11. 確認状況（2026-10-29 時点）
+## 11. 確認状況（2026-11-12 時点）
 
-済み（社外の開発環境、ネットワークなし `--offline`、DB はコピーを使用）:
+済み（社内の管理用 Windows。依頼書に記載された結果）:
+- Windows PowerShell 5.1 で `publish_peer.ps1` を実行して成功（2026-11-12。手動実行とタスクスケジューラ経由の両方）。ps1 が社内の PowerShell 5.1 で動いたのはこれが初めて。
+- 同期フォルダなしの運用（`dest_dir` 空、`-NoSync`）で通った。
+- 本番キーでの `doclist sync`／`fetch`: 書類 16 件を取得し失敗 0 件。照合は全文一致 14/14、`publish check` は ok（5 files）。
+- タスクスケジューラ「edinet-risk publish_peer」（毎週月曜 7:30、`-NoSync` 付き、実行時間の上限 4 時間）の登録と試行（`LastTaskResult` = 0）。
+- 初回の SharePoint への手動アップロード（§12）。公開フォルダ名は「EDINETリスク - 公開」。
+
+済み（社外の開発環境、ネットワークなし `--offline`、DB はコピーを使用。2026-10-29）:
 - ps1 と同じ順・同じ引数で CLI を実行（`publish targets` → `resolve` → `fetch --dry-run` → `extract` → `resolve` → `compare` → `report` → `monitor` → `publish build` → リネームコピー → `publish check`）。輸送7社で `publish check` が ok、`publish\templates\yoY_report_template.xlsx`（`差分詳細`・`分析` シート込み）のコピーを確認。
 - ps1 の静的テスト（`tests/test_peer_publish.py`）: UTF-8 BOM・PowerShell 5.1 で使えない構文なし・各サブコマンドに渡すオプション（`--config` を含む）が CLI に実在・ps1 が読む JSON キーが `publish config`／`publish build` の出力に実在。
 
-未（この環境ではできないため実施していない）:
-- [ ] 社内の管理用 Windows・PowerShell 5.1 での `publish_peer.ps1` の実行（`-DryRun` を含め、ps1 そのものはまだ一度も実行していない）
-- [ ] タスクスケジューラ登録と定期実行（§5）
-- [ ] SharePoint の実 URL の確定と、手動アップロード（§12、`-NoSync`）での公開。「置き換え」後も統合プロンプトの同じリンクで新しいファイルが読めるか（同期フォルダ（`dest_dir`）へのコピーは、同期できる環境になったときに確認）
-- [ ] 統合プロンプトのリンクを実 URL に差し替えて M365 Copilot 実機で読めるかの確認（`copilot-runbook.md`「パイロット第1確認」）
-- [ ] 本番キーでの `doclist sync`／`fetch`（週次差分の取得）
+未:
+- [ ] タスクスケジューラの定期起動（月曜 7:30 の自動起動）での実行。登録と試行は済み（上）
+- [ ] 2週目以降の「置き換え」アップロード後も、統合プロンプトの同じリンクで新しいファイルが読めるか（同期フォルダ（`dest_dir`）へのコピーは、同期できる環境になったときに確認）
+- [ ] M365 Copilot 実機で読めるか（`copilot-runbook.md`「パイロット第1確認」）。統合プロンプトの実行で成果物（6シートの xlsx）は作られたが、内容に不具合があった（要約の誤り、注記の混入、要確認の重複など）。プロンプトを修正中で、再実行の結果は未確認。配布版では見本ブックのリンクが未差し替えだった
 
 ## 12. 手動アップロード（同期フォルダなし）
 
