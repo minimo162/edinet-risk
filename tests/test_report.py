@@ -110,6 +110,7 @@ def test_source_sheet_and_html(tmp_path):
     src = _sheet(excel.snapshot(r["xlsx"]), "出典")
     text = "".join(t for runs in src.values() for t, *_ in runs)
     assert "EDINET" in text and "PDL1.0" in text and "加工" in text and "run_id=t1" in text
+    assert "自動処理の結果であり" in text and "加工者" not in text and "仮置き" not in text
     page = (r["out_dir"] / "html" / r["html"]["テスト自動車"]).read_text(encoding="utf-8")
     assert "<ins>大きな</ins>" in page and "<del>5</del>" in page and "<ins>6</ins>" in page
     assert "&lt;機密情報&gt;" in page and "<機密情報>" not in page
@@ -249,3 +250,11 @@ def test_transport7_compare_report(tmp_path):
     assert len(r["html"]) == 7
     again = m1_report.run(m1_compare.run(M1, ROOT / "out" / "m0", ROOT / "cache", TH, tmp_path, "seven2")["run_dir"])
     assert excel.snapshot(again["xlsx"], {"seven2": "<RUN>"}) == excel.snapshot(r["xlsx"], {"seven": "<RUN>"})
+
+
+def test_source_notice_wording():
+    # Q-1 (2026-11-12): placeholder lines removed; source / terms / processing / caution remain.
+    assert [k for k, _ in excel.SOURCE_NOTICE] == ["出典", "利用条件", "加工した旨", "注意"]
+    text = "".join(v for _, v in excel.SOURCE_NOTICE)
+    assert "（仮）" not in text and "D8" not in text and "仮置き" not in text
+    assert dict(excel.SOURCE_NOTICE)["注意"] == "自動処理の結果であり、正確性は手作業の照合で確認すること"

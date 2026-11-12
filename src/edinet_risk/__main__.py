@@ -217,9 +217,13 @@ def main(argv=None) -> int:
     pq.add_argument("--sector", nargs="+", default=None,
                     help="提出者業種（完全一致、複数可）; read from <cache>/codes/Edinetcode.zip")
     pq.add_argument("--limit", type=int, default=None, help="first N filers in 証券コード order (e.g. 100)")
-    pq.add_argument("--with-filing", action="store_true",
-                    help="only filers with an annual report (filing_filter [annual_report]) whose period ends in "
-                         "window.current")
+    pqf = pq.add_mutually_exclusive_group()
+    pqf.add_argument("--include-no-filing", action="store_true",
+                     help="also keep filers without an annual report in window.current (by default they are left "
+                          "out: they would show as 当期書類なし and lower the monitor match rate)")
+    pqf.add_argument("--with-filing", action="store_true",
+                     help="(default; kept for compatibility) only filers with an annual report (filing_filter "
+                          "[annual_report]) whose period ends in window.current")
     pq.add_argument("--dry-run", action="store_true", help="print the counts and the first filers; write nothing")
     pq.add_argument("--config", type=Path, default=None, help="settings TOML (default: config/settings.toml)")
     pq.add_argument("--db", type=Path, default=None, help="database (overrides paths.db; read only)")
@@ -745,7 +749,10 @@ def _publish_requests(a, s, db_path: Path) -> int:
         listed = publish.listed_filers(conn)
         exclude = {f["edinetCode"] for f in publish.merge_targets(exclude_files, conn)[0]} if exclude_files else set()
         with_filing = None
-        if a.with_filing:
+        if not a.include_no_filing:   # Q-4: filers without a current annual report are left out by default
+            if not Path(s.paths.filing_filter).exists():
+                raise publish.PublishError(f"{s.paths.filing_filter} がありません（当期の有報での絞り込み（既定）に"
+                                           "使う。絞り込まないときは --include-no-filing）")
             ff = FilingFilter.from_toml(s.paths.filing_filter)
             w = s.window.current
             with_filing = publish.filers_with_filing(conn, w.period_end_from, w.period_end_to,
@@ -760,7 +767,7 @@ def _publish_requests(a, s, db_path: Path) -> int:
         cond.append(f"証券コード {a.sec_from or ''}〜{a.sec_to or ''}")
     if a.sector:
         cond.append("業種 " + "・".join(a.sector))
-    if a.with_filing:
+    if not a.include_no_filing:
         w = s.window.current
         cond.append(f"当期の有報あり（期末 {w.period_end_from}〜{w.period_end_to}）")
     if a.limit is not None:

@@ -243,7 +243,8 @@ def filers_with_filing(conn: sqlite3.Connection, period_end_from: date, period_e
             "AND coalesce(withdrawal_status, '0') = '0' AND period_end BETWEEN ? AND ?",
             [*doc_types, *ordinances, *forms, period_end_from.isoformat(), period_end_to.isoformat()]).fetchall()
     except sqlite3.OperationalError:
-        raise PublishError("documents テーブルがありません。--with-filing には書類一覧（`doclist sync`）が要ります") from None
+        raise PublishError("documents テーブルがありません。当期の有報での絞り込み（既定）には"
+                           "書類一覧（`doclist sync`）が要ります（絞り込まないときは --include-no-filing）") from None
     return {r[0] for r in rows if r[0]}
 
 

@@ -30,6 +30,7 @@
    `publish.as_of = "today"` のとき、当期の提出終端は `max(window.current.submit_to, T)`（実行時に延長。settings は書き換えない。
    `publish config` の `submit_to`・`submit_to_extended`、ps1 はログに1行）。固定日で T が `window.current.submit_to` を過ぎる、
    または `run.as_of` から92日超のときは警告（続行）。
+   当期・前期（確定。Q-3）: 当期 = 期末が `[window.current]` の期末の範囲（FY YYYY-03 なら (YYYY-1)-04〜YYYY-03 に終わる期）に入る有報、前期 = 当期の期首より前で最も新しい期末の有報。決算月によらず同じ（詳細は `admin-runbook.md` §8）。
    書類一覧の範囲: `publish config` の `doclist_from`〜`doclist_to`。`当日-(doclist_days-1)` から前へ、キャッシュで確定していない日（未取得・当日取得）をさかのぼり、直近の確定日（＝前回の成功同期）の翌日から当日まで。上限 `publish.doclist_max_days`（既定 62）日。上限に当たったら警告。確定済みの日は再取得しない。
    取得ゲート: `doclist sync` が 0 以外（2 を含む）で終わったら、その週は公開しない。`fetch` が終了コード 2（一部失敗）のとき、
    新規取得（`fetched` + `adopted_from_cache`）が 0 件なら公開しない。どちらも ps1 は終了コード 1 で終わり、同期フォルダは前回分のまま。
